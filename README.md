@@ -2,12 +2,13 @@
 
 **Versión:** 1.0 · **Fecha:** 10 de noviembre de 2026 · **Idioma:** español
 
-## Estado de la implementación (10 nov 2026)
-La **fase P0** está implementada: cámara, detección de mano, arena superpuesta y una prueba jugable de atrapar y lanzar gremlins. **Falta validarla en un teléfono real.**
+## Estado de la implementación (11 nov 2026)
+Las fases **P0** y **P1** están implementadas: cámara, detección de mano, arena superpuesta y una partida mínima completa (práctica, Runners que atacan el núcleo, 3 vidas, puntuación, récord local, victoria a los 90 s, derrota y reinicio por gesto). Verificado en PC; **sin cifras registradas de teléfono real**. Bomb, Tank, combos por tiempo y oleadas llegan en P2.
 
 - Instalar y arrancar: `setup.cmd` y luego `iniciar.cmd` → guía en `docs/11_GUIA_DE_USO.md`.
-- Qué se verificó, qué no, y la prueba de 15 minutos en el móvil: `docs/10_P0_FACTIBILIDAD.md`.
-- Biblia de arte y sensaciones: `JUEGO.md`.
+- Informe de P1 y qué probar en el móvil: `docs/12_P1_VERTICAL_SLICE.md`.
+- Informe de P0, decisiones técnicas y matriz F01–F18: `docs/10_P0_FACTIBILIDAD.md`.
+- Biblia de arte, reglas y sensaciones: `JUEGO.md`.
 
 El resto de este documento describe el kit original de preproducción.
 

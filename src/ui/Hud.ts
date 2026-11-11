@@ -26,6 +26,11 @@ export class Hud {
   private readonly modeChip: HTMLElement;
   private readonly handChip: HTMLElement;
   private readonly objective: HTMLElement;
+  private readonly lives: HTMLElement;
+  private readonly left: HTMLElement;
+  private readonly timer: HTMLElement;
+  private readonly pause: HTMLElement;
+  private lastLives = -1;
   private readonly hint: HTMLElement;
   private readonly calibration: HTMLElement;
   private readonly settingsButton: HTMLButtonElement;
@@ -48,6 +53,16 @@ export class Hud {
     this.handChip = el('p', 'chip chip-hand');
     this.handChip.setAttribute('role', 'status');
     this.objective = el('p', 'chip chip-objective');
+    this.lives = el('p', 'chip chip-lives');
+    this.lives.setAttribute('role', 'img');
+    this.left = el('div', 'hud-left');
+    this.left.append(this.objective, this.lives);
+    this.timer = el('p', 'chip chip-timer');
+    this.timer.setAttribute('role', 'timer');
+    this.pause = el('div', 'pause');
+    this.pause.setAttribute('role', 'status');
+    this.pause.append(el('p', 'pause-title', 'Pausa'), el('p', '', 'Muestra la mano para seguir'));
+    this.pause.hidden = true;
     this.hint = el('p', 'hint');
     this.hint.setAttribute('role', 'status');
     this.banner = el('p', 'chip chip-banner');
@@ -90,7 +105,9 @@ export class Hud {
     root.append(
       this.modeChip,
       this.handChip,
-      this.objective,
+      this.left,
+      this.timer,
+      this.pause,
       this.banner,
       this.confirm,
       this.hint,
@@ -107,8 +124,34 @@ export class Hud {
     this.calibration.hidden = mode !== 'prepare';
     this.settingsButton.hidden = mode !== 'prepare' && mode !== 'result';
     this.result.hidden = mode !== 'result';
-    this.objective.hidden = mode !== 'playing';
+    this.left.hidden = mode !== 'playing';
+    this.timer.hidden = mode !== 'playing' || this.timer.textContent === '';
+    if (mode !== 'playing') this.pause.hidden = true;
     this.confirm.hidden = mode !== 'prepare' && mode !== 'result';
+  }
+
+  /**
+   * Información de partida en los bordes superiores.
+   * @param lives vidas del núcleo, o null para ocultarlas (práctica).
+   * @param timer texto del cronómetro, o '' para ocultarlo (práctica).
+   */
+  setMatchInfo(objective: string, lives: number | null, maxLives: number, timer: string, urgent: boolean): void {
+    setText(this.objective, objective);
+    this.lives.hidden = lives === null;
+    if (lives !== null && lives !== this.lastLives) {
+      this.lastLives = lives;
+      // Corazones llenos y vacíos: la integridad no depende solo del color.
+      this.lives.textContent = '♥'.repeat(lives) + '♡'.repeat(Math.max(0, maxLives - lives));
+      this.lives.setAttribute('aria-label', `Núcleo: ${lives} de ${maxLives} vidas`);
+      this.lives.classList.toggle('chip-critical', lives === 1);
+    }
+    this.timer.hidden = timer === '';
+    setText(this.timer, timer);
+    this.timer.classList.toggle('chip-critical', urgent);
+  }
+
+  setPaused(paused: boolean): void {
+    if (this.pause.hidden === paused) this.pause.hidden = !paused;
   }
 
   setAnchorLabel(text: string): void {
@@ -126,10 +169,6 @@ export class Hud {
     this.handChip.dataset.state = tracking;
     this.handChip.textContent =
       tracking === 'ok' ? '✋ Mano detectada' : tracking === 'grace' ? '✋ Recuperando…' : '✋ Acerca la mano';
-  }
-
-  setObjective(text: string): void {
-    setText(this.objective, text);
   }
 
   setHint(text: string): void {
@@ -156,7 +195,8 @@ export class Hud {
     }
   }
 
-  showResult(title: string, rows: ResultRow[]): void {
+  showResult(title: string, rows: ResultRow[], outcome: 'won' | 'lost'): void {
+    this.result.dataset.outcome = outcome;
     this.resultTitle.textContent = title;
     this.resultList.replaceChildren();
     for (const row of rows) {

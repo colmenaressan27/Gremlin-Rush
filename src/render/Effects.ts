@@ -61,12 +61,27 @@ export class Effects {
     this.addTrauma(0.2);
   }
 
-  impact(x: number, z: number, chain: number, now: number): void {
+  /** @param points puntos concedidos; 0 muestra solo la onomatopeya (práctica). */
+  impact(x: number, z: number, chain: number, points: number, now: number): void {
     this.burst(x, 0.1, z, PALETTE.scoreYellow, 14, 1.7);
     this.burst(x, 0.1, z, PALETTE.gremlinGreen, 8, 1.1);
     this.addTrauma(0.45 + 0.12 * Math.min(chain, 4));
     this.hitStopUntil = now + F.hitStopMs * this.intensity;
-    this.popup(chain > 1 ? `¡x${chain}!` : '¡ZAS!', x, z, chain > 1 ? 'popup-chain' : '');
+    const text = points > 0 ? `+${points}` : '¡ZAS!';
+    this.popup(chain > 1 ? `x${chain} ${text}` : text, x, z, chain > 1 ? 'popup-chain' : '');
+  }
+
+  /** El proyectil gastado se desvanece: puntos sin multiplicador. */
+  spent(x: number, z: number, points: number): void {
+    this.burst(x, 0.08, z, PALETTE.gremlinGreen, 8, 0.9);
+    if (points > 0) this.popup(`+${points}`, x, z, '');
+  }
+
+  /** Daño al núcleo: lo más llamativo de la partida, para que nunca pase desapercibido. */
+  coreHit(): void {
+    this.burst(0, 0.2, 0, PALETTE.alertRed, 22, 1.9);
+    this.addTrauma(0.9);
+    this.popup('−1 vida', 0, 0, 'popup-danger');
   }
 
   popup(text: string, x: number, z: number, extraClass: string): void {

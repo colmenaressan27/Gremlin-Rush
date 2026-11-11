@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ArenaAnchor } from '../src/ar/ArenaAnchor';
 import { CONFIG } from '../src/config/gameConfig';
 import type { Gremlin } from '../src/game/Gremlin';
-import { SandboxSession } from '../src/game/SandboxSession';
+import { GameSession } from '../src/game/GameSession';
 import { World } from '../src/game/World';
 import { GestureInterpreter } from '../src/input/GestureInterpreter';
 import { GrabController, type DropReason } from '../src/interaction/GrabController';
@@ -45,22 +45,28 @@ describe('World', () => {
   const impacts: Array<{ chain: number }> = [];
   let bounces = 0;
   let defeated = 0;
+  let spent = 0;
+  let coreHits = 0;
 
   beforeEach(() => {
     world = new World(8);
     impacts.length = 0;
     bounces = 0;
     defeated = 0;
+    spent = 0;
+    coreHits = 0;
     world.listener = {
       onSpawn: () => undefined,
       onImpact: (p) => impacts.push({ chain: p.chain }),
       onWallBounce: () => bounces++,
       onSettle: () => undefined,
+      onSpent: () => spent++,
+      onCoreReached: () => coreHits++,
       onDefeated: () => defeated++,
     };
   });
 
-  it('un gremlin lanzado derriba a otro, lo cuenta una sola vez y sigue su camino', () => {
+  it('un gremlin lanzado derriba a otro una sola vez, sigue su camino y al detenerse se gasta', () => {
     const projectile = placeWalking(world, -0.6, 0);
     const victim = placeWalking(world, 0.3, 0.02);
     world.grab(projectile);
@@ -69,10 +75,32 @@ describe('World', () => {
     expect(impacts).toEqual([{ chain: 1 }]);
     expect(victim.state === 'dying' || victim.state === 'inactive').toBe(true);
     expect(projectile.state).toBe('thrown');
-    simulate(world, 1);
+    simulate(world, 3);
     expect(victim.state).toBe('inactive');
-    expect(defeated).toBe(1);
     expect(impacts.length).toBe(1);
+    expect(spent).toBe(1);
+    expect(projectile.state).toBe('inactive');
+    expect(defeated).toBe(2);
+  });
+
+  it('un atacante camina hasta el núcleo, lo daña una sola vez y desaparece', () => {
+    const g = world.spawn('runner', 0.8, 0, 'attack', 0.2)!;
+    simulate(world, 8);
+    expect(coreHits).toBe(1);
+    expect(g.state).toBe('inactive');
+    simulate(world, 3);
+    expect(coreHits).toBe(1);
+  });
+
+  it('un atacante agarrado o aturdido no daña al núcleo hasta que vuelve a caminar', () => {
+    const g = world.spawn('runner', 0.5, 0, 'attack', 0.2)!;
+    simulate(world, 0.6);
+    world.grab(g);
+    simulate(world, 6);
+    expect(coreHits).toBe(0);
+    world.drop(g);
+    simulate(world, 6);
+    expect(coreHits).toBe(1);
   });
 
   it('una buena línea encadena dos golpes con el mismo lanzamiento', () => {
@@ -123,19 +151,130 @@ describe('World', () => {
     expect(Math.hypot(onCore.x, onCore.y)).toBeGreaterThanOrEqual(CONFIG.arena.coreRadius);
   });
 
-  it('la sesión repone gremlins y termina al alcanzar los golpes objetivo', () => {
-    const session = new SandboxSession(world);
-    session.start();
-    expect(world.countActive()).toBe(CONFIG.sandbox.population);
-    world.gremlins[0]!.state = 'inactive';
-    for (let i = 0; i < 200; i++) {
+});
+
+describe('GameSession (reglas de la partida)', () => {
+  const M = CONFIG.match;
+  let world: World;
+  let session: GameSession;
+
+  /** Conecta el mundo con la sesión como lo hace la aplicación. */
+  const wire = (): void => {
+    world.listener = {
+      onSpawn: () => undefined,
+      onImpact: (p) => void session.registerImpact(p.chain),
+      onWallBounce: () => undefined,
+      onSettle: () => undefined,
+      onSpent: () => void session.registerSpent(),
+      onCoreReached: () => void session.registerCoreHit(),
+      onDefeated: () => undefined,
+    };
+  };
+  const run = (seconds: number, handX = 0, handY = 0, hand = false): void => {
+    for (let i = 0; i < Math.round(seconds / STEP); i++) {
       world.update(STEP);
-      session.update(STEP);
+      session.update(STEP, handX, handY, hand);
     }
-    expect(world.countActive()).toBe(CONFIG.sandbox.population);
-    for (let i = 0; i < CONFIG.sandbox.hitsToWin; i++) session.registerHit(i + 1);
-    expect(session.done).toBe(true);
-    expect(session.bestChain).toBe(CONFIG.sandbox.hitsToWin);
+  };
+
+  beforeEach(() => {
+    world = new World(M.maxGremlins);
+    session = new GameSession(world);
+    wire();
+  });
+
+  it('la práctica no tiene reloj ni peligro y repone gremlins', () => {
+    session.start(true);
+    expect(session.phase).toBe('practice');
+    expect(world.countActive()).toBe(M.practicePopulation);
+    world.gremlins[0]!.state = 'inactive';
+    run(20);
+    expect(session.phase).toBe('practice');
+    expect(session.timeLeft).toBe(M.durationSeconds);
+    expect(session.lives).toBe(M.lives);
+    expect(world.countActive()).toBe(M.practicePopulation);
+    expect(world.gremlins.every((g) => g.state === 'inactive' || g.behavior === 'wander')).toBe(true);
+  });
+
+  it('el primer golpe termina la práctica: empieza el combate, sin puntos por ese golpe', () => {
+    session.start(true);
+    expect(session.registerImpact(1)).toBe(0);
+    expect(session.phase).toBe('combat');
+    expect(session.score).toBe(0);
+    // Los de la práctica siguen deambulando (munición gratis) y entran los primeros atacantes.
+    expect(world.countActive('wander')).toBe(M.practicePopulation);
+    expect(world.countActive('attack')).toBe(M.openingSpawns);
+  });
+
+  it('puntúa por derrotado con multiplicador de cadena limitado y sin puntos por solo agarrar', () => {
+    session.start(false);
+    expect(session.registerImpact(1)).toBe(100);
+    expect(session.registerImpact(2)).toBe(200);
+    expect(session.registerImpact(9)).toBe(100 * CONFIG.score.maxMultiplier);
+    expect(session.registerSpent()).toBe(100);
+    expect(session.score).toBe(900);
+    expect(session.defeated).toBe(4);
+    expect(session.bestChain).toBe(9);
+    world.grab(world.gremlins.find((g) => g.state !== 'inactive')!);
+    run(1);
+    expect(session.score).toBe(900);
+  });
+
+  it('si nadie defiende, el núcleo pierde sus tres vidas y la partida termina en derrota', () => {
+    session.start(false);
+    run(40);
+    expect(session.lives).toBe(0);
+    expect(session.phase).toBe('lost');
+    expect(session.timeLeft).toBeGreaterThan(0);
+    // Tras el final ya no hay atacantes ni más daño.
+    const timeAtEnd = session.timeLeft;
+    run(10);
+    expect(session.timeLeft).toBe(timeAtEnd);
+    expect(world.gremlins.every((g) => g.state === 'inactive' || g.behavior === 'wander')).toBe(true);
+  });
+
+  it('si el núcleo aguanta hasta agotar el tiempo se gana, con bonus por vida conservada', () => {
+    session.start(false, 2); // demasiado corto para que alguien llegue al núcleo
+    run(2.2);
+    expect(session.phase).toBe('won');
+    expect(session.lives).toBe(M.lives);
+    expect(session.lifeBonus).toBe(M.lives * CONFIG.score.lifeBonus);
+    expect(session.score).toBe(session.lifeBonus);
+  });
+
+  it('nunca hay más atacantes que el máximo y la presión aumenta con el tiempo', () => {
+    session.start(false);
+    let max = 0;
+    // Se sostiene a todos en el sitio (como si estuvieran agarrados) para que se acumulen.
+    for (let i = 0; i < 60 * 30; i++) {
+      for (const g of world.gremlins) if (g.state === 'walking') g.speed = 0.0001;
+      world.update(STEP);
+      session.update(STEP, 0, 0, false);
+      max = Math.max(max, world.countActive());
+    }
+    expect(max).toBe(M.maxAttackers);
+    expect(M.spawnIntervalEnd).toBeLessThan(M.spawnIntervalStart);
+    expect(M.attackSpeedEnd).toBeGreaterThan(M.attackSpeedStart);
+  });
+
+  it('los enemigos no aparecen justo debajo de la mano', () => {
+    const hand = { x: 0, y: 0 };
+    World.portalPosition(0, hand);
+    session.start(false);
+    let spawned = 0;
+    for (let i = 0; i < 60 * 60 && session.phase === 'combat'; i++) {
+      world.update(STEP);
+      session.update(STEP, hand.x, hand.y, true);
+      for (const g of world.gremlins) {
+        // Recién aparecido en este paso: todavía no ha avanzado su reloj de estado.
+        if (g.state !== 'spawning' || g.stateTime !== 0) continue;
+        spawned++;
+        expect(Math.hypot(g.x - hand.x, g.y - hand.y)).toBeGreaterThanOrEqual(M.spawnAvoidRadius);
+      }
+      // Se retira a los que ya caminan para que siga habiendo hueco y no lleguen al núcleo.
+      for (const g of world.gremlins) if (g.state === 'walking') g.state = 'inactive';
+    }
+    expect(spawned).toBeGreaterThan(10);
   });
 });
 

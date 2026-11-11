@@ -105,6 +105,11 @@ dd {
   color: var(--yellow);
 }
 
+.popup-danger {
+  font-size: 2.4rem;
+  color: var(--red);
+}
+
 .popup-show {
   animation: popup 0.75s ease-out forwards;
 }
@@ -147,10 +152,80 @@ dd {
   white-space: nowrap;
 }
 
-.chip-objective {
+.hud-left {
+  position: absolute;
+  top: calc(var(--gap) + var(--safe-top));
   left: calc(var(--gap) + var(--safe-left));
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.hud-left .chip {
+  position: static;
+}
+
+.chip-objective {
   color: var(--yellow);
   font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip-lives {
+  color: var(--red);
+  font-size: 1.25rem;
+  letter-spacing: 0.08em;
+  border: 2px solid transparent;
+}
+
+.chip-timer {
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+  border: 2px solid transparent;
+}
+
+/* Estado crítico: borde y texto, no solo color de relleno. */
+.chip-critical {
+  border-color: var(--red);
+  color: var(--white);
+  background: rgb(120 20 40 / 0.92);
+}
+
+#hud[data-mode='playing'] .chip-mode {
+  left: auto;
+  right: calc(var(--gap) + var(--safe-right));
+  top: calc(var(--gap) + var(--safe-top) + 44px);
+  transform: none;
+  padding: 2px 10px;
+  font-size: 0.8125rem;
+}
+
+.pause {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 14px 28px;
+  border: 2px solid var(--yellow);
+  border-radius: var(--radius);
+  background: var(--panel);
+  text-align: center;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.pause-title {
+  color: var(--yellow);
+  font-size: 2rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.result[data-outcome='lost'] .subtitle {
+  color: var(--red);
 }
 
 .chip-hand {
@@ -549,6 +624,14 @@ dd {
   .chip-mode {
     top: calc(var(--gap) + var(--safe-top) + 44px);
     font-size: 0.875rem;
+  }
+
+  .chip-timer {
+    top: calc(var(--gap) + var(--safe-top) + 44px);
+  }
+
+  #hud[data-mode='playing'] .chip-mode {
+    top: calc(var(--gap) + var(--safe-top) + 88px);
   }
 
   .chip-banner {

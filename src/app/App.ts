@@ -4,10 +4,11 @@ import { videoToScreen } from '../ar/viewportMapping';
 import { Sfx } from '../audio/Sfx';
 import { CameraError, CameraFeed } from '../camera/CameraFeed';
 import { CONFIG } from '../config/gameConfig';
+import { loadBestScore, submitScore } from '../config/records';
 import { loadSettings, saveSettings, type Settings } from '../config/settings';
 import type { Vec2 } from '../core/math';
+import { GameSession } from '../game/GameSession';
 import type { Gremlin } from '../game/Gremlin';
-import { SandboxSession } from '../game/SandboxSession';
 import { World, type WorldListener } from '../game/World';
 import { GestureInterpreter, type HandSample } from '../input/GestureInterpreter';
 import { HoldConfirm } from '../input/HoldConfirm';
@@ -32,6 +33,10 @@ type TutorialStep = 'grab' | 'throw' | 'hit' | 'done';
 
 const MAX_FRAME_MS = 100;
 const FINISH_DELAY_SECONDS = 0.9;
+const COMBAT_HINT_MS = 3500;
+/** Últimos segundos de partida: el cronómetro se marca como urgente. */
+const URGENT_SECONDS = 10;
+const HAPTIC_CORE_MS = 80;
 /** Si la marca de tiempo del fotograma se aleja tanto del reloj local, no es fiable. */
 const MAX_FRAME_AGE_MS = 500;
 const CONFIRM_ZONE_TOLERANCE = 1.15;
@@ -62,8 +67,8 @@ export class App {
   private readonly simHand = this.simulated ? new SimulatedHand(document.body) : null;
 
   private readonly anchor: ArenaAnchor = new OverlayAnchor();
-  private readonly world = new World(CONFIG.sandbox.maxGremlins);
-  private readonly session = new SandboxSession(this.world);
+  private readonly world = new World(CONFIG.match.maxGremlins);
+  private readonly session = new GameSession(this.world);
   private readonly grab = new GrabController(this.world, this.anchor, this.gestures);
 
   private readonly renderer = new SceneRenderer(byId<HTMLCanvasElement>('scene'));
@@ -89,6 +94,10 @@ export class App {
   private lastSeq = 0;
   private wasTracking = false;
   private finishTimer = 0;
+  /** La práctica solo se ofrece hasta que el jugador consigue su primer golpe. */
+  private practiceDone = false;
+  private paused = false;
+  private combatHintUntil = 0;
   private qualityTier = 0;
   private lowFpsMs = 0;
   private wakeLock: WakeLockSentinel | null = null;
@@ -193,30 +202,47 @@ export class App {
     this.state = 'prepare';
     this.screens.show('none');
     this.hud.setMode('prepare');
-    this.session.start();
+    // Unos gremlins deambulando sirven de referencia mientras se coloca la arena.
+    this.session.start(true);
     this.confirm.arm(performance.now());
   }
 
   private startSession(): void {
     this.state = 'playing';
-    this.tutorial = 'grab';
+    this.tutorial = this.practiceDone ? 'done' : 'grab';
     this.finishTimer = 0;
+    this.paused = false;
     this.qualityTier = 0;
     this.lowFpsMs = 0;
     this.applyQuality();
     this.metrics.resetSession();
-    this.session.start();
+    this.session.start(!this.practiceDone, this.matchDuration());
+    if (this.practiceDone) this.combatHintUntil = performance.now() + COMBAT_HINT_MS;
     this.hud.setMode('playing');
     this.sfx.confirm();
   }
 
+  /** La duración solo se puede acortar en desarrollo o simulación, para las pruebas automáticas. */
+  private matchDuration(): number {
+    const requested = Number(this.query.get('duracion'));
+    const allowed = (import.meta.env.DEV || this.simulated) && requested > 0;
+    return allowed ? requested : CONFIG.match.durationSeconds;
+  }
+
   private finishSession(): void {
+    const won = this.session.phase === 'won';
     this.state = 'result';
     this.grab.cancel();
-    this.hud.showResult('¡Prueba superada!', this.buildResultRows());
+    this.hud.setPaused(false);
+    this.hud.showResult(
+      won ? '¡Núcleo a salvo!' : 'Núcleo destruido',
+      this.buildResultRows(won),
+      won ? 'won' : 'lost',
+    );
     this.hud.setMode('result');
     this.confirm.arm(performance.now());
-    this.sfx.win();
+    if (won) this.sfx.win();
+    else this.sfx.lose();
   }
 
   private openSettings(): void {
@@ -229,22 +255,32 @@ export class App {
     this.screens.show('welcome');
   }
 
-  private buildResultRows(): ResultRow[] {
+  private buildResultRows(won: boolean): ResultRow[] {
+    const s = this.session;
     const m = this.metrics;
     const c = m.counters;
+    const previousBest = loadBestScore();
+    const isRecord = submitScore(s.score);
+    const points = (n: number): string => n.toLocaleString('es');
+
     const rows: ResultRow[] = [
-      { label: 'Tiempo', value: `${this.session.elapsedSeconds.toFixed(1)} s` },
-      { label: 'Agarres', value: `${c.grabs}/${c.pinches} (${m.grabRate().toFixed(0)} %)` },
-      { label: 'Lanzados', value: `${c.throws}` },
-      { label: 'Soltados', value: `${c.dropsSlow}` },
-      { label: 'Mejor cadena', value: `x${this.session.bestChain}` },
-      { label: 'Mano perdida', value: `${c.trackingLosses} veces` },
-      { label: 'FPS', value: `${m.sessionFpsAvg.toFixed(0)} (mín ${m.sessionFpsMin.toFixed(0)})` },
+      { label: 'Puntuación', value: points(s.score) },
+      {
+        label: 'Récord',
+        value: isRecord ? `¡Nuevo! (antes ${points(previousBest)})` : points(previousBest),
+      },
+      { label: 'Derrotados', value: `${s.defeated}` },
+      { label: 'Mejor cadena', value: `x${s.bestChain}` },
+      won
+        ? { label: 'Vidas', value: `${s.lives} (+${points(s.lifeBonus)})` }
+        : { label: 'Aguantaste', value: `${Math.round(s.progress * 100)} % del tiempo` },
     ];
-    if (!this.simulated) {
+    // Los datos técnicos solo aparecen con el diagnóstico activado.
+    if (this.diagnostics.active) {
       rows.push(
-        { label: 'Visión', value: `${m.inferenceMs.toFixed(0)} ms · ${m.detectHz.toFixed(0)} Hz` },
-        { label: 'Latencia', value: m.latencyMs > 0 ? `≈ ${m.latencyMs.toFixed(0)} ms` : '—' },
+        { label: 'Agarres', value: `${c.grabs}/${c.pinches} (${m.grabRate().toFixed(0)} %)` },
+        { label: 'Lanzados', value: `${c.throws} · soltados ${c.dropsSlow}` },
+        { label: 'FPS', value: `${m.sessionFpsAvg.toFixed(0)} (mín ${m.sessionFpsMin.toFixed(0)})` },
       );
     }
     return rows;
@@ -442,6 +478,7 @@ export class App {
     }
     this.gestures.clearEvents();
 
+    this.arenaView.setLives(this.session.lives);
     this.arenaView.update(dt);
     this.effects.update(dt);
     const gremlins = this.world.gremlins;
@@ -476,15 +513,40 @@ export class App {
 
   private updatePlaying(dt: number, dtMs: number, now: number): void {
     this.watchQuality(dtMs);
-    this.grab.update(dt, now, !this.session.done);
+    this.updatePause();
+    if (this.paused) {
+      // En pausa nada avanza: ni cronómetro, ni enemigos, ni puntuación.
+      this.grab.update(dt, now, false);
+      return;
+    }
+    this.grab.update(dt, now, !this.session.finished);
     if (now >= this.effects.hitStopUntil) {
       this.world.update(dt);
-      this.session.update(dt);
+      this.session.update(dt, this.grab.cursor.x, this.grab.cursor.y, this.grab.cursorValid);
     }
-    if (this.session.done) {
+    if (this.session.finished) {
       this.finishTimer += dt;
       if (this.finishTimer >= FINISH_DELAY_SECONDS) this.finishSession();
     }
+  }
+
+  /**
+   * Pausa de recuperación: solo si la mano falta varios segundos en pleno combate.
+   * Las ausencias breves no pausan, y se reanuda en cuanto la mano vuelve a verse estable.
+   */
+  private updatePause(): void {
+    const hand = this.gestures.state;
+    if (this.session.phase !== 'combat') {
+      this.paused = false;
+    } else if (!this.paused) {
+      if (hand.tracking === 'lost' && hand.absentMs > CONFIG.match.pauseAfterMs) {
+        this.paused = true;
+        this.grab.cancel();
+      }
+    } else if (hand.tracking === 'ok' && hand.stable) {
+      this.paused = false;
+    }
+    this.hud.setPaused(this.paused);
   }
 
   /** Menús: palma abierta mantenida sobre el núcleo = empezar / repetir. */
@@ -515,12 +577,27 @@ export class App {
 
     let hint = '';
     if (this.state === 'playing') {
-      this.hud.setObjective(`Golpes ${this.session.hits}/${CONFIG.sandbox.hitsToWin}`);
-      if (lost && hand.absentMs > CONFIG.gesture.absentHintMs) hint = 'Acerca la mano a la arena';
+      const s = this.session;
+      if (s.phase === 'practice') {
+        this.hud.setMatchInfo('Práctica', null, CONFIG.match.lives, '', false);
+      } else {
+        const seconds = Math.ceil(s.timeLeft);
+        const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+        this.hud.setMatchInfo(
+          s.score.toLocaleString('es'),
+          s.lives,
+          CONFIG.match.lives,
+          clock,
+          seconds <= URGENT_SECONDS,
+        );
+      }
+      if (this.paused) hint = '';
+      else if (lost && hand.absentMs > CONFIG.gesture.absentHintMs) hint = 'Acerca la mano a la arena';
       else if (this.tutorial === 'grab') hint = 'Pellizca un gremlin con pulgar e índice';
       else if (this.tutorial === 'throw') {
         hint = this.grab.held ? 'Mueve la mano y suelta con impulso' : 'Atrápalo y suéltalo con impulso';
       } else if (this.tutorial === 'hit') hint = 'Lánzalo contra otro gremlin';
+      else if (performance.now() < this.combatHintUntil) hint = '¡Defiende el núcleo!';
     } else if (lost) {
       hint = 'Mete una mano en la imagen';
     } else if (this.state === 'prepare') {
@@ -577,17 +654,35 @@ export class App {
     onImpact: (projectile: Gremlin, victim: Gremlin) => {
       if (this.state !== 'playing') return;
       this.metrics.counters.hits++;
-      this.session.registerHit(projectile.chain);
-      this.effects.impact(victim.x, victim.y, projectile.chain, performance.now());
+      const wasPractice = this.session.phase === 'practice';
+      const points = this.session.registerImpact(projectile.chain);
+      this.effects.impact(victim.x, victim.y, projectile.chain, points, performance.now());
       this.sfx.hit(projectile.chain);
       this.vibrate(HAPTIC_HIT_MS);
       this.tutorial = 'done';
+      if (wasPractice) {
+        // Primer golpe conseguido: termina la práctica y empieza la partida de verdad.
+        this.practiceDone = true;
+        this.combatHintUntil = performance.now() + COMBAT_HINT_MS;
+        this.sfx.alert();
+      }
     },
     onWallBounce: (g: Gremlin) => {
       this.effects.wall(g.x, g.y);
       this.sfx.wall();
     },
     onSettle: () => undefined,
+    onSpent: (g: Gremlin) => {
+      if (this.state !== 'playing') return;
+      this.effects.spent(g.x, g.y, this.session.registerSpent());
+    },
+    onCoreReached: () => {
+      if (this.state !== 'playing' || !this.session.registerCoreHit()) return;
+      this.arenaView.hit();
+      this.effects.coreHit();
+      this.sfx.coreHit();
+      this.vibrate(HAPTIC_CORE_MS);
+    },
     onDefeated: () => undefined,
   };
 

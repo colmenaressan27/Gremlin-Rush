@@ -38,6 +38,7 @@
 | Sacudida | máx. 0,03 unidades de arena | solo la arena virtual; el vídeo real no se mueve |
 | Partículas | 96 en pool, 0,3–0,6 s | se reducen con calidad baja y «reducir efectos» |
 | Combo sonoro | escala pentatónica ascendente | cada golpe encadenado sube una nota |
+| Daño al núcleo | destello rojo, sacudida 0,9, «−1 vida», alarma grave | lo más llamativo de la partida: nunca hay daño invisible |
 
 Todos estos valores son hipótesis iniciales **pendientes de playtest en móvil real**.
 
@@ -61,8 +62,14 @@ Todos estos valores son hipótesis iniciales **pendientes de playtest en móvil 
 - **Regla:** si falta rendimiento se degradan los efectos visuales, nunca la detección de la mano.
 
 ## 7. Contenido y estado
-- **Modos:** P0 «prueba de manipulación» (5 golpes, sin reloj) — implementado · partida de 90 s con núcleo — pendiente (P1/P2).
-- **Enemigos:** Runner — implementado como placeholder que deambula · Bomb, Tank — pendientes (P2).
+- **Partida (P1, implementada):**
+  1. *Práctica* — solo la primera vez: gremlins que deambulan, sin reloj ni peligro. Termina con el primer golpe.
+  2. *Combate* — 90 s. Los Runners salen de los portales y corren al núcleo; cada uno que lo toca quita una de las 3 vidas y desaparece. El ritmo de aparición (3 s → 1,5 s) y la velocidad (0,14 → 0,20) suben con el tiempo; máximo 6 atacantes a la vez.
+  3. *Final* — derrota si el núcleo llega a 0; victoria si aguanta, con +500 por vida. Récord local.
+- **Munición:** un gremlin lanzado que golpea a alguien se «gasta» y desaparece al detenerse (+100). Si falla, sobrevive y vuelve a atacar: fallar tiene coste, pero bajo.
+- **Puntuación:** 100 por Runner × golpes encadenados en el mismo lanzamiento (máx. ×5). Sujetar no da puntos. El combo por ventana de tiempo llega en P2.
+- **Pausa:** automática si la mano falta más de 3,5 s en combate; se reanuda sola al volver la mano.
+- **Enemigos:** Runner — implementado (placeholder) · Bomb, Tank — pendientes (P2).
 - **Anclaje:** arena superpuesta calibrable — implementado · anclaje por imagen — descartado por ahora (ver decisiones).
 
 ## 8. Decisiones
@@ -74,3 +81,7 @@ Todos estos valores son hipótesis iniciales **pendientes de playtest en móvil 
 | 2026-11-10 | La velocidad de lanzamiento se mide con el nudillo del índice, no con las puntas | Las puntas se mueven al abrir los dedos y provocarían lanzamientos falsos |
 | 2026-11-10 | Inicio/reinicio con palma abierta mantenida sobre el núcleo | Gesto muy distinto del pellizco; con bloqueo inicial para no confundirlo con «soltar» |
 | 2026-11-10 | Ayuda contextual abajo, no arriba | Arriba tapa el fondo de la arena, por donde entran los gremlins |
+| 2026-11-11 | El proyectil que acierta se gasta; el que falla sobrevive | Refuerza «enemigos como munición», permite cadenas en un mismo lanzamiento y evita que un Runner solitario sea imposible de eliminar para siempre |
+| 2026-11-11 | La práctica termina con el primer golpe y sus gremlins quedan como munición inofensiva | El reloj no corre hasta que el jugador demuestra que sabe atrapar y lanzar; convertirlos en atacantes los dejaba a un paso del núcleo |
+| 2026-11-11 | Los enemigos no aparecen en portales a menos de 0,55 de la mano | El GDD pide no hacer aparecer enemigos bajo la mano |
+| 2026-11-11 | Pausa solo tras 3,5 s sin mano, nunca por gesto | No se puede pausar a voluntad con ausencias breves; en pausa no avanza nada, así que no se gana ventaja |

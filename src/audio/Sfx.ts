@@ -95,6 +95,23 @@ export class Sfx {
     [523, 659, 784, 1047, 1319].forEach((f, i) => this.tone(f, f, 0.14, 'triangle', 0.3, i * 0.09));
   }
 
+  /** Alarma grave y descendente: daño al núcleo. */
+  coreHit(): void {
+    this.tone(220, 55, 0.4, 'sawtooth', 0.45);
+    this.tone(660, 330, 0.25, 'square', 0.2, 0.02);
+    this.sweep(0.25, 900, 200, 0.4);
+  }
+
+  lose(): void {
+    [392, 330, 262, 196].forEach((f, i) => this.tone(f, f * 0.97, 0.22, 'triangle', 0.3, i * 0.16));
+  }
+
+  /** Paso de la práctica al combate. */
+  alert(): void {
+    this.tone(660, 660, 0.1, 'square', 0.2);
+    this.tone(880, 880, 0.16, 'square', 0.2, 0.12);
+  }
+
   trackingLost(): void {
     this.tone(440, 330, 0.16, 'sine', 0.18);
   }

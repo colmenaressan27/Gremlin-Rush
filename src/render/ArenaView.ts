@@ -1,6 +1,7 @@
 import {
   BoxGeometry,
   CircleGeometry,
+  Color,
   Group,
   Mesh,
   MeshBasicMaterial,
@@ -16,6 +17,8 @@ const A = CONFIG.arena;
 const FLAT = -Math.PI / 2;
 const CORE_SEGMENTS = 3;
 const CORE_HEIGHT = 0.2;
+const LOST_SEGMENT_OPACITY = 0.18;
+const PULSE_DECAY = 2.2;
 
 /**
  * Arena y núcleo con geometría provisional (placeholder): disco translúcido, borde luminoso,
@@ -26,6 +29,10 @@ export class ArenaView {
   private readonly crystal: Mesh;
   private readonly segments: Mesh[] = [];
   private readonly portals: Mesh[] = [];
+  private readonly baseEmissive = new Color(PALETTE.scoreYellow);
+  private readonly hitColor = new Color(PALETTE.alertRed);
+  private lives = CORE_SEGMENTS;
+  private pulse = 0;
   private time = 0;
 
   constructor() {
@@ -93,8 +100,30 @@ export class ArenaView {
     return ring;
   }
 
+  /** Muestra la integridad del núcleo: un arco encendido por vida; el cristal se enrojece al quedar una. */
+  setLives(lives: number): void {
+    if (lives === this.lives) return;
+    this.lives = lives;
+    for (let i = 0; i < this.segments.length; i++) {
+      const material = this.segments[i]!.material as MeshBasicMaterial;
+      material.opacity = i < lives ? 1 : LOST_SEGMENT_OPACITY;
+      material.color.setHex(i < lives ? PALETTE.scoreYellow : PALETTE.alertRed);
+    }
+    this.baseEmissive.setHex(lives <= 1 ? PALETTE.alertRed : PALETTE.scoreYellow);
+  }
+
+  /** Destello rojo breve al recibir daño. */
+  hit(): void {
+    this.pulse = 1;
+  }
+
   update(dtSeconds: number): void {
     this.time += dtSeconds;
+    this.pulse = Math.max(0, this.pulse - dtSeconds * PULSE_DECAY);
+    const material = this.crystal.material as MeshLambertMaterial;
+    material.emissive.copy(this.baseEmissive).lerp(this.hitColor, this.pulse);
+    material.emissiveIntensity = 0.55 + this.pulse * 0.9;
+    this.crystal.scale.x = this.crystal.scale.z = 1 + this.pulse * 0.35;
     this.crystal.rotation.y += dtSeconds * 0.9;
     this.crystal.position.y = CORE_HEIGHT + Math.sin(this.time * 2.2) * 0.012;
     const pulse = 0.85 + Math.sin(this.time * 3) * 0.15;

@@ -29,6 +29,10 @@ echo        Android Chrome: Configuración avanzada - Acceder
 echo   4. Si Windows pregunta por el Firewall, permite Node.js en redes privadas.
 echo   5. En este PC puedes abrir la dirección "Local".
 echo.
+echo   IMPORTANTE: la dirección "Network" solo vale para la Wi-Fi a la que
+echo   estaba conectado el PC al abrir esta ventana. Si cambias de red,
+echo   cierra esta ventana y vuelve a abrir iniciar.cmd.
+echo.
 echo   Para detener el servidor: Ctrl + C, o cierra esta ventana.
 echo.
 call npm run dev:movil

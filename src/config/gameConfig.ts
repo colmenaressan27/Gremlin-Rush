@@ -104,6 +104,8 @@ export const CONFIG = {
     stunSeconds: 0.7,
     dropStunSeconds: 0.45,
     knockbackSpeed: 2.6,
+    /** Un gremlin lanzado que golpeó a alguien se "gasta": desaparece al detenerse. Si falló, sobrevive. */
+    projectileSpentOnHit: true,
     dyingSeconds: 0.45,
     spawnSeconds: 0.4,
     separationK: 6,
@@ -116,13 +118,37 @@ export const CONFIG = {
     swayHz: 0.9,
     wanderMinRadius: 0.3,
     wanderMaxRadius: 0.82,
+    /** Cerca del núcleo el vaivén se apaga para que la llegada sea legible. */
+    attackSwayFadeRadius: 0.45,
   },
 
-  sandbox: {
-    population: 4,
-    maxGremlins: 8,
-    hitsToWin: 5,
-    respawnSeconds: 1.1,
+  /** Partida P1: práctica sin reloj y combate cronometrado (valores pendientes de playtest). */
+  match: {
+    maxGremlins: 10,
+    durationSeconds: 90,
+    lives: 3,
+    /** Práctica: gremlins que deambulan hasta que el jugador consigue su primer golpe. */
+    practicePopulation: 3,
+    practiceRespawnSeconds: 1.1,
+    /** Combate: el intervalo entre apariciones y la velocidad de ataque progresan a lo largo de la partida. */
+    spawnIntervalStart: 3,
+    spawnIntervalEnd: 1.5,
+    attackSpeedStart: 0.14,
+    attackSpeedEnd: 0.2,
+    maxAttackers: 6,
+    openingSpawns: 2,
+    /** Los portales a menos de esta distancia de la mano se evitan al hacer aparecer enemigos. */
+    spawnAvoidRadius: 0.55,
+    /** Segundos sin mano durante el combate antes de pausar (no se pausa por ausencias breves). */
+    pauseAfterMs: 3500,
+  },
+
+  score: {
+    runner: 100,
+    /** El multiplicador por golpes encadenados en un mismo lanzamiento no pasa de este valor. */
+    maxMultiplier: 5,
+    lifeBonus: 500,
+    storageKey: 'gremlinrush.record.v1',
   },
 
   feel: {

@@ -1,5 +1,8 @@
 export type GremlinKind = 'runner';
 
+/** 'wander' = deambula sin amenazar (práctica); 'attack' = corre hacia el núcleo. */
+export type GremlinBehavior = 'wander' | 'attack';
+
 export type GremlinState =
   | 'inactive'
   | 'spawning'
@@ -13,7 +16,10 @@ export type GremlinState =
 export interface Gremlin {
   readonly id: number;
   kind: GremlinKind;
+  behavior: GremlinBehavior;
   state: GremlinState;
+  /** Velocidad al caminar (arena/s). */
+  speed: number;
   x: number;
   y: number;
   vx: number;
@@ -41,7 +47,9 @@ export function createGremlin(id: number): Gremlin {
   return {
     id,
     kind: 'runner',
+    behavior: 'wander',
     state: 'inactive',
+    speed: 0,
     x: 0,
     y: 0,
     vx: 0,

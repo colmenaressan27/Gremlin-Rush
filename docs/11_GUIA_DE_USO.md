@@ -53,7 +53,11 @@ Esto hace que la **página** del juego sea accesible desde Internet mientras el 
 
 Esta postura es una recomendación de partida **sin validar todavía**. Si resulta incómoda, prueba la cámara frontal (Ajustes → Cámara → Frontal) con el móvil mirando hacia ti.
 
-## 5. Cómo se juega (fase P0)
+## 5. Cómo se juega
+
+**Objetivo:** que el núcleo del centro aguante 90 segundos. Los gremlins salen de los portales naranjas y corren hacia él; cada uno que lo toca le quita una de sus tres vidas. Para eliminarlos, atrapa uno y lánzalo contra otro: caen los dos y sumas puntos. Si con un lanzamiento golpeas a varios, cada golpe vale más.
+
+La primera vez hay una **práctica** sin reloj ni peligro: termina cuando consigues tu primer golpe. Si quitas la mano más de unos segundos en pleno combate, la partida se pausa sola y sigue cuando la mano vuelve.
 
 | Quieres… | Haz… |
 |---|---|
@@ -73,7 +77,7 @@ La pantalla solo se toca antes de jugar: para dar permiso, cambiar ajustes y col
 
 | Síntoma | Qué hacer |
 |---|---|
-| El móvil no carga la página | Misma Wi-Fi; dirección con `https://` y `:8443`; permite Node.js en el Firewall; algunas redes de invitados bloquean la conexión entre dispositivos |
+| El móvil no carga la página | Si el PC cambió de Wi-Fi desde que abriste `iniciar.cmd`, la dirección «Network» ya no vale: cierra la ventana y ábrela de nuevo. Además: misma Wi-Fi; dirección con `https://` y `:8443`; permite Node.js en el Firewall; algunas redes de invitados bloquean la conexión entre dispositivos |
 | «Sin permiso de cámara» | Sigue los pasos de la pantalla y pulsa «Reintentar» |
 | «Hace falta una conexión segura» | Abriste `http://`; usa la dirección `https://` |
 | La mano se mueve al revés | Ajustes → Invertir espejo |

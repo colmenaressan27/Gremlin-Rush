@@ -1,6 +1,13 @@
 import { CONFIG } from '../config/gameConfig';
 import { angleDelta, clamp, randRange } from '../core/math';
-import { createGremlin, isGrabbable, isHittable, type Gremlin, type GremlinKind } from './Gremlin';
+import {
+  createGremlin,
+  isGrabbable,
+  isHittable,
+  type Gremlin,
+  type GremlinBehavior,
+  type GremlinKind,
+} from './Gremlin';
 
 /** Avisos de la simulación hacia efectos, sonido, puntuación y métricas. */
 export interface WorldListener {
@@ -8,6 +15,10 @@ export interface WorldListener {
   onImpact(projectile: Gremlin, victim: Gremlin, speed: number): void;
   onWallBounce(g: Gremlin, speed: number): void;
   onSettle(g: Gremlin): void;
+  /** Un proyectil que había golpeado a alguien se detiene y desaparece ("munición gastada"). */
+  onSpent(g: Gremlin): void;
+  /** Un atacante toca el núcleo: se avisa una sola vez y el gremlin desaparece. */
+  onCoreReached(g: Gremlin): void;
   onDefeated(g: Gremlin): void;
 }
 
@@ -21,6 +32,8 @@ const TUMBLE_RATE = 14;
 /** Desvío lateral del proyectil al chocar, como fracción de su velocidad. */
 const IMPACT_DEFLECTION = 0.25;
 const WALL_BOUNCE_MIN_SPEED = 0.4;
+/** Fracción del radio del gremlin que debe solaparse con el núcleo para contar como contacto. */
+const CORE_CONTACT = 0.4;
 
 /**
  * Simulación 2.5D de la arena: círculos sobre un plano con paso fijo.
@@ -42,16 +55,38 @@ export class World {
     this.accumulator = 0;
   }
 
-  countActive(): number {
+  /** Gremlins vivos (no cuentan los que están desapareciendo). Opcionalmente, solo los de un comportamiento. */
+  countActive(behavior?: GremlinBehavior): number {
     let n = 0;
-    for (const g of this.gremlins) if (g.state !== 'inactive' && g.state !== 'dying') n++;
+    for (const g of this.gremlins) {
+      if (g.state === 'inactive' || g.state === 'dying') continue;
+      if (behavior === undefined || g.behavior === behavior) n++;
+    }
     return n;
   }
 
-  spawn(kind: GremlinKind, x: number, y: number): Gremlin | null {
+  /** Cambia el comportamiento de todos los gremlins vivos (p. ej. al acabar la práctica o la partida). */
+  setAllBehavior(behavior: GremlinBehavior, speed: number): void {
+    for (const g of this.gremlins) {
+      if (g.state === 'inactive') continue;
+      g.behavior = behavior;
+      g.speed = speed;
+      if (behavior === 'wander') this.pickTarget(g);
+    }
+  }
+
+  spawn(
+    kind: GremlinKind,
+    x: number,
+    y: number,
+    behavior: GremlinBehavior = 'wander',
+    speed: number = R.speed,
+  ): Gremlin | null {
     for (const g of this.gremlins) {
       if (g.state !== 'inactive') continue;
       g.kind = kind;
+      g.behavior = behavior;
+      g.speed = speed;
       g.state = 'spawning';
       g.x = x;
       g.y = y;
@@ -178,7 +213,7 @@ export class World {
     g.stateTime = 0;
     g.vx = 0;
     g.vy = 0;
-    this.pickTarget(g);
+    if (g.behavior === 'wander') this.pickTarget(g);
   }
 
   private pickTarget(g: Gremlin): void {
@@ -189,27 +224,36 @@ export class World {
   }
 
   private stepWalking(g: Gremlin, dt: number): void {
-    const dx = g.targetX - g.x;
-    const dy = g.targetY - g.y;
+    const attacking = g.behavior === 'attack';
+    const dx = (attacking ? 0 : g.targetX) - g.x;
+    const dy = (attacking ? 0 : g.targetY) - g.y;
     const d = Math.hypot(dx, dy);
-    if (d < ARRIVE_DISTANCE) {
+    if (attacking) {
+      if (d <= A.coreRadius + g.radius * CORE_CONTACT) {
+        // Contacto válido con el núcleo: daño una sola vez y el gremlin desaparece.
+        g.state = 'inactive';
+        this.listener?.onCoreReached(g);
+        return;
+      }
+    } else if (d < ARRIVE_DISTANCE) {
       this.pickTarget(g);
       return;
     }
     // Avance hacia el destino con un vaivén lateral: ruta "ligeramente cambiante".
-    const sway = Math.sin(this.time * TWO_PI * R.swayHz + g.phase) * R.swayAmplitude;
+    let sway = Math.sin(this.time * TWO_PI * R.swayHz + g.phase) * R.swayAmplitude;
+    if (attacking) sway *= Math.min(1, d / R.attackSwayFadeRadius);
     let mx = dx / d - (dy / d) * sway;
     let my = dy / d + (dx / d) * sway;
     const m = Math.hypot(mx, my);
     mx /= m;
     my /= m;
-    g.vx = mx * R.speed;
-    g.vy = my * R.speed;
+    g.vx = mx * g.speed;
+    g.vy = my * g.speed;
     g.x += g.vx * dt;
     g.y += g.vy * dt;
     g.facing += angleDelta(g.facing, Math.atan2(my, mx)) * Math.min(1, TURN_RATE * dt);
     this.keepInside(g);
-    this.keepOffCore(g);
+    if (!attacking) this.keepOffCore(g);
   }
 
   private stepThrown(g: Gremlin, dt: number): void {
@@ -248,11 +292,17 @@ export class World {
     }
 
     if (Math.hypot(g.vx, g.vy) < P.settleSpeed) {
-      g.state = 'stunned';
-      g.stateTime = 0;
-      g.stateDuration = P.stunSeconds;
       g.vx = 0;
       g.vy = 0;
+      g.stateTime = 0;
+      if (P.projectileSpentOnHit && g.chain > 0) {
+        g.state = 'dying';
+        g.stateDuration = P.dyingSeconds;
+        this.listener?.onSpent(g);
+        return;
+      }
+      g.state = 'stunned';
+      g.stateDuration = P.stunSeconds;
       this.keepOffCore(g);
       this.listener?.onSettle(g);
     }

@@ -1,10 +1,11 @@
-// Prueba de humo automática en un navegador de escritorio (Edge o Chrome ya instalados).
+// Prueba de humo automática en un navegador de escritorio (Chrome o Edge ya instalados).
 //
 //  A) Canal real: cámara FALSA del navegador + MediaPipe. Comprueba que la cámara abre, el modelo
 //     carga y la detección corre sin errores. La cámara falsa no muestra ninguna mano, así que
 //     NO valida la detección de manos ni el rendimiento en un teléfono.
-//  B) Simulación (?sim=1): el ratón hace de mano. Comprueba el ciclo completo
-//     empezar → atrapar → lanzar → golpear → resultado → repetir, sin pulsar ningún botón de juego.
+//  B) Simulación (?sim=1): el ratón hace de mano. Recorre una partida completa:
+//     inicio por gesto → práctica → combate → puntuación → pausa → derrota → reinicio por gesto.
+//  C) Simulación con partida corta: victoria por tiempo, bonus y récord.
 //
 // Uso: npm run smoke   (arranca su propio servidor de desarrollo)
 import { mkdir } from 'node:fs/promises';
@@ -21,6 +22,7 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'PASA ' : 'FALLA'} ${name}${detail ? ` — ${detail}` : ''}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const VIEWPORT = { width: 844, height: 390 };
 
 async function launch() {
   const args = [
@@ -58,7 +60,7 @@ async function waitFor(page, expr, timeoutMs, label) {
 
 async function realPipeline(browser, baseUrl) {
   console.log('\nA) Cámara falsa + MediaPipe');
-  const page = await browser.newPage({ viewport: { width: 844, height: 390 } });
+  const page = await browser.newPage({ viewport: VIEWPORT });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
@@ -95,7 +97,7 @@ async function realPipeline(browser, baseUrl) {
 
 async function deniedCamera(browser, baseUrl) {
   console.log('\nA2) Permiso de cámara denegado');
-  const context = await browser.newContext({ viewport: { width: 844, height: 390 }, permissions: [] });
+  const context = await browser.newContext({ viewport: VIEWPORT, permissions: [] });
   const page = await context.newPage();
   await page.addInitScript(() => {
     navigator.mediaDevices.getUserMedia = () =>
@@ -123,12 +125,14 @@ async function confirmWithPalm(page, expected) {
   return ok;
 }
 
-/** Atrapa un gremlin y lo lanza hacia otro. Devuelve true si consigue al menos un golpe nuevo. */
+/**
+ * Atrapa un gremlin y lo lanza hacia otro. Devuelve true si consigue un golpe nuevo,
+ * false si falla, y null si todavía no había munición y objetivo (no cuenta como intento).
+ */
 async function grabAndThrow(page) {
-  const before = await gr(page, 'g.session.hits');
+  const before = await gr(page, 'g.metrics.counters.hits');
   const list = (await gr(page, 'g.gremlins()')).filter((g) => g.state === 'walking');
   if (list.length < 2) {
-    // Aún no hay munición y objetivo (reapariciones en curso): se espera sin gastar el intento.
     await sleep(300);
     return null;
   }
@@ -151,18 +155,35 @@ async function grabAndThrow(page) {
     if (i === RELEASE_AT) await page.mouse.up();
     await sleep(8);
   }
-  await sleep(900);
-  return (await gr(page, 'g.session.hits')) > before;
+  await sleep(700);
+  return (await gr(page, 'g.metrics.counters.hits')) > before;
 }
 
-async function simulatedLoop(browser, baseUrl) {
-  console.log('\nB) Ciclo de juego con mano simulada');
-  const page = await browser.newPage({ viewport: { width: 844, height: 390 } });
+/** Lanza gremlins hasta que se cumpla la condición o se agote el tiempo. */
+async function throwUntil(page, expr, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await gr(page, expr)) return true;
+    await grabAndThrow(page);
+  }
+  return gr(page, expr);
+}
+
+async function openSimulated(browser, baseUrl, query) {
+  const page = await browser.newPage({ viewport: VIEWPORT });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto(`${baseUrl}?sim=1&diag=1`);
+  await page.goto(`${baseUrl}?sim=1&${query}`);
+  await page.evaluate(() => localStorage.clear());
   await page.getByRole('button', { name: 'Activar cámara' }).click();
-  check('llega a la preparación', await waitFor(page, `g.state() === 'prepare'`, 10000, 'prepare'));
+  await waitFor(page, `g.state() === 'prepare'`, 10000, 'prepare');
+  return { page, errors };
+}
+
+async function fullMatch(browser, baseUrl) {
+  console.log('\nB) Partida completa con mano simulada (derrota)');
+  const { page, errors } = await openSimulated(browser, baseUrl, 'diag=1');
+  check('llega a la preparación', (await gr(page, 'g.state()')) === 'prepare');
   await page.screenshot({ path: join(shots, 'b1-preparacion.png') });
 
   // Un clic de ratón (equivalente a tocar la pantalla) sobre el núcleo NO debe iniciar nada.
@@ -172,6 +193,7 @@ async function simulatedLoop(browser, baseUrl) {
   check('tocar/pellizcar en el menú no inicia la partida', (await gr(page, 'g.state()')) === 'prepare');
 
   check('F14 inicio por gesto: palma abierta mantenida', await confirmWithPalm(page, 'playing'));
+  check('la primera partida empieza en práctica, sin reloj ni peligro', (await gr(page, 'g.session.phase')) === 'practice');
   await sleep(700);
 
   // Soltar con la mano quieta no debe lanzar.
@@ -189,25 +211,65 @@ async function simulatedLoop(browser, baseUrl) {
   check('F06 soltar en reposo no lanza', counters.throws === 0 && counters.dropsSlow === 1);
   await sleep(600);
 
-  let attempts = 0;
-  const deadline = Date.now() + 90_000;
-  while ((await gr(page, 'g.state()')) === 'playing' && attempts < 40 && Date.now() < deadline) {
-    if ((await grabAndThrow(page)) === null) continue;
-    attempts++;
-    if (attempts === 2) await page.screenshot({ path: join(shots, 'b3-partida.png') });
-  }
-  const final = await gr(page, '({ c: g.metrics.counters, hits: g.session.hits, last: g.metrics.lastRelease, fps: g.metrics.fps })');
+  const combat = await throwUntil(page, `g.session.phase === 'combat'`, 45000);
+  check('F07/F08 el primer golpe termina la práctica y empieza el combate', combat);
+  check('la práctica no da puntos', (await gr(page, 'g.session.score')) === 0);
+
+  const scored = await throwUntil(page, `g.session.score > 0 || g.state() !== 'playing'`, 30000);
+  const mid = await gr(page, '({ score: g.session.score, lives: g.session.lives, defeated: g.session.defeated, c: g.metrics.counters })');
   check(
-    'F07/F08 los lanzamientos golpean a otros gremlins',
-    final.hits >= 5,
-    `${final.hits} golpes · ${final.c.throws} lanzados · ${final.c.dropsSlow} soltados · ${final.c.grabs}/${final.c.pinches} agarres · ${attempts} intentos · ${final.fps.toFixed(0)} FPS · último: ${final.last}`,
+    'F11 derrotar gremlins suma puntos',
+    scored && mid.score > 0,
+    `${mid.score} puntos · ${mid.defeated} derrotados · ${mid.c.throws} lanzados · ${mid.c.grabs}/${mid.c.pinches} agarres`,
   );
-  const finished = await waitFor(page, `g.state() === 'result'`, 4000, 'result');
-  check('F12/F13 la sesión termina y muestra el resultado', finished);
+  await page.screenshot({ path: join(shots, 'b3-combate.png') });
+
+  // Pausa de recuperación: la mano desaparece varios segundos en pleno combate.
+  if ((await gr(page, 'g.state()')) === 'playing') {
+    await page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerleave')));
+    const paused = await page.getByText('Muestra la mano para seguir').waitFor({ timeout: 8000 }).then(() => true).catch(() => false);
+    const t1 = await gr(page, 'g.session.timeLeft');
+    await sleep(1200);
+    const t2 = await gr(page, 'g.session.timeLeft');
+    check('la partida se pausa si la mano falta varios segundos', paused);
+    check('F12 en pausa el cronómetro no corre', paused && t1 === t2, `${t1.toFixed(2)} s → ${t2.toFixed(2)} s`);
+    await page.screenshot({ path: join(shots, 'b4-pausa.png') });
+    await page.mouse.move(60, 330);
+    await sleep(900);
+    check('se reanuda sola al volver la mano', !(await page.getByText('Muestra la mano para seguir').isVisible()));
+  }
+
+  // Sin defender, el núcleo cae: mano presente pero quieta en una esquina.
+  const lost = await waitFor(page, `g.state() === 'result'`, 60000, 'resultado');
+  const end = await gr(page, '({ phase: g.session.phase, lives: g.session.lives, score: g.session.score })');
+  check('F10 el núcleo pierde sus vidas una a una hasta la derrota', lost && end.phase === 'lost' && end.lives === 0);
+  check('F13 el resultado explica la derrota y muestra puntuación', await page.getByRole('heading', { name: 'Núcleo destruido' }).isVisible());
   await sleep(400);
-  await page.screenshot({ path: join(shots, 'b4-resultado.png') });
-  check('F14 reinicio por gesto, sin tocar botones', finished && (await confirmWithPalm(page, 'playing')));
+  await page.screenshot({ path: join(shots, 'b5-derrota.png') });
+
+  const restarted = lost && (await confirmWithPalm(page, 'playing'));
+  check('F14 reinicio por gesto, sin tocar botones', restarted);
+  check('la segunda partida entra directa al combate', restarted && (await gr(page, 'g.session.phase')) === 'combat');
   check('sin errores de ejecución', errors.length === 0, errors.slice(0, 3).join(' | '));
+  await page.close();
+}
+
+async function shortWin(browser, baseUrl) {
+  console.log('\nC) Partida corta con mano simulada (victoria)');
+  const { page, errors } = await openSimulated(browser, baseUrl, 'duracion=3');
+  await confirmWithPalm(page, 'playing');
+  await sleep(500);
+  const combat = await throwUntil(page, `g.session.phase !== 'practice'`, 45000);
+  const finished = combat && (await waitFor(page, `g.state() === 'result'`, 15000, 'resultado'));
+  const end = await gr(page, '({ phase: g.session.phase, lives: g.session.lives, score: g.session.score, bonus: g.session.lifeBonus })');
+  check('F12 la partida termina al agotarse el tiempo con el núcleo en pie', finished && end.phase === 'won', `fase ${end.phase}, ${end.lives} vidas`);
+  check('la victoria suma bonus por vidas conservadas', end.bonus === end.lives * 500 && end.score >= end.bonus, `${end.score} puntos, bonus ${end.bonus}`);
+  check('F13 el resultado anuncia la victoria y el récord local', (await page.getByRole('heading', { name: '¡Núcleo a salvo!' }).isVisible()) && (await page.getByText('¡Nuevo!').isVisible()));
+  const stored = await page.evaluate(() => Number(localStorage.getItem('gremlinrush.record.v1')));
+  check('el récord se guarda solo en el dispositivo', stored === end.score, `guardado ${stored}`);
+  await sleep(400);
+  await page.screenshot({ path: join(shots, 'c-victoria.png') });
+  check('sin errores de ejecución (victoria)', errors.length === 0, errors.slice(0, 3).join(' | '));
   await page.close();
 }
 
@@ -220,7 +282,8 @@ try {
   browser = await launch();
   await realPipeline(browser, baseUrl);
   await deniedCamera(browser, baseUrl);
-  await simulatedLoop(browser, baseUrl);
+  await fullMatch(browser, baseUrl);
+  await shortWin(browser, baseUrl);
 } finally {
   await browser?.close();
   await server.close();
