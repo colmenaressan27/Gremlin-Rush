@@ -10,6 +10,10 @@ export interface Settings {
   reduceEffects: boolean;
   sound: boolean;
   diagnostics: boolean;
+  /** Texto del HUD y de los menús más grande. */
+  largeText: boolean;
+  /** Modo asistido: enemigos más lentos y apariciones más espaciadas. */
+  assisted: boolean;
   arenaScale: number;
   arenaOffsetY: number;
   arenaTiltDeg: number;
@@ -31,6 +35,8 @@ export function defaultSettings(): Settings {
     reduceEffects: reduce,
     sound: true,
     diagnostics: false,
+    largeText: false,
+    assisted: false,
     arenaScale: 1,
     arenaOffsetY: CONFIG.arena.defaultOffsetY,
     arenaTiltDeg: CONFIG.arena.defaultTiltDeg,

@@ -31,6 +31,19 @@ export class Hud {
   private readonly timer: HTMLElement;
   private readonly pause: HTMLElement;
   private lastLives = -1;
+  private readonly combo: HTMLElement;
+  private readonly comboLabel: HTMLElement;
+  private readonly comboBar: HTMLElement;
+  private lastCombo = 0;
+  private lastComboWidth = -1;
+  private readonly wave: HTMLElement;
+  private readonly waveTitle: HTMLElement;
+  private readonly waveSubtitle: HTMLElement;
+  private readonly tutorial: HTMLElement;
+  private readonly tutorialStep: HTMLElement;
+  private readonly tutorialIcon: HTMLElement;
+  private readonly tutorialText: HTMLElement;
+  private lastTutorial = '';
   private readonly hint: HTMLElement;
   private readonly calibration: HTMLElement;
   private readonly settingsButton: HTMLButtonElement;
@@ -63,6 +76,35 @@ export class Hud {
     this.pause.setAttribute('role', 'status');
     this.pause.append(el('p', 'pause-title', 'Pausa'), el('p', '', 'Muestra la mano para seguir'));
     this.pause.hidden = true;
+
+    // Combo: multiplicador grande y una barra que se vacía con la ventana de tiempo.
+    this.combo = el('div', 'combo');
+    this.combo.setAttribute('aria-hidden', 'true');
+    this.comboLabel = el('p', 'combo-label');
+    const comboTrack = el('div', 'combo-track');
+    this.comboBar = el('div', 'combo-bar');
+    comboTrack.append(this.comboBar);
+    this.combo.append(this.comboLabel, comboTrack);
+    this.combo.hidden = true;
+
+    this.wave = el('div', 'wave');
+    this.wave.setAttribute('role', 'status');
+    this.waveTitle = el('p', 'wave-title');
+    this.waveSubtitle = el('p', 'wave-subtitle');
+    this.wave.append(this.waveTitle, this.waveSubtitle);
+    this.wave.hidden = true;
+
+    this.tutorial = el('div', 'tutorial');
+    this.tutorial.setAttribute('role', 'status');
+    this.tutorialIcon = el('span', 'tutorial-icon');
+    this.tutorialIcon.setAttribute('aria-hidden', 'true');
+    this.tutorialStep = el('p', 'tutorial-step');
+    this.tutorialText = el('p', 'tutorial-text');
+    const tutorialCopy = el('div', 'tutorial-copy');
+    tutorialCopy.append(this.tutorialStep, this.tutorialText);
+    this.tutorial.append(this.tutorialIcon, tutorialCopy);
+    this.tutorial.hidden = true;
+
     this.hint = el('p', 'hint');
     this.hint.setAttribute('role', 'status');
     this.banner = el('p', 'chip chip-banner');
@@ -107,9 +149,12 @@ export class Hud {
       this.handChip,
       this.left,
       this.timer,
+      this.combo,
+      this.wave,
       this.pause,
       this.banner,
       this.confirm,
+      this.tutorial,
       this.hint,
       this.calibration,
       this.settingsButton,
@@ -126,8 +171,71 @@ export class Hud {
     this.result.hidden = mode !== 'result';
     this.left.hidden = mode !== 'playing';
     this.timer.hidden = mode !== 'playing' || this.timer.textContent === '';
-    if (mode !== 'playing') this.pause.hidden = true;
+    if (mode !== 'playing') {
+      this.pause.hidden = true;
+      this.combo.hidden = true;
+      this.wave.hidden = true;
+      this.tutorial.hidden = true;
+      this.lastCombo = 0;
+      this.lastTutorial = '';
+    }
     this.confirm.hidden = mode !== 'prepare' && mode !== 'result';
+  }
+
+  /**
+   * Combo en curso. Solo se muestra a partir de dos impactos encadenados.
+   * @param combo      impactos encadenados.
+   * @param multiplier multiplicador de puntos que se está aplicando.
+   * @param fraction   tiempo restante de la ventana de combo, 0..1.
+   */
+  setCombo(combo: number, multiplier: number, fraction: number): void {
+    const visible = combo >= 2;
+    if (this.combo.hidden === visible) this.combo.hidden = !visible;
+    if (!visible) {
+      this.lastCombo = 0;
+      return;
+    }
+    if (combo !== this.lastCombo) {
+      this.lastCombo = combo;
+      this.comboLabel.textContent = `COMBO x${multiplier}`;
+      // Reinicia el "golpe" de escala cada vez que el combo sube.
+      this.combo.classList.remove('combo-bump');
+      void this.combo.offsetWidth;
+      this.combo.classList.add('combo-bump');
+    }
+    const width = Math.round(fraction * 50) * 2;
+    if (width !== this.lastComboWidth) {
+      this.lastComboWidth = width;
+      this.comboBar.style.width = `${width}%`;
+    }
+  }
+
+  /** Rótulo breve de cambio de oleada; desaparece solo. */
+  showWave(title: string, subtitle: string): void {
+    this.waveTitle.textContent = title;
+    this.waveSubtitle.textContent = subtitle;
+    this.wave.hidden = false;
+    this.wave.classList.remove('wave-show');
+    void this.wave.offsetWidth;
+    this.wave.classList.add('wave-show');
+  }
+
+  /**
+   * Tarjeta del tutorial guiado. step = 0 la oculta.
+   * @param icon pictograma (emoji) que acompaña al texto: la instrucción no depende solo de leer.
+   */
+  setTutorial(step: number, total: number, icon: string, text: string): void {
+    const key = step === 0 ? '' : `${step}|${text}`;
+    if (key === this.lastTutorial) return;
+    this.lastTutorial = key;
+    this.tutorial.hidden = step === 0;
+    if (step === 0) return;
+    this.tutorialStep.textContent = `Paso ${step} de ${total}`;
+    this.tutorialIcon.textContent = icon;
+    this.tutorialText.textContent = text;
+    this.tutorial.classList.remove('tutorial-in');
+    void this.tutorial.offsetWidth;
+    this.tutorial.classList.add('tutorial-in');
   }
 
   /**

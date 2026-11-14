@@ -1,16 +1,33 @@
-import type { Group } from 'three';
+import { Mesh, MeshBasicMaterial, RingGeometry, type Group } from 'three';
 import type { ArenaAnchor } from '../ar/ArenaAnchor';
 import { CONFIG, PALETTE } from '../config/gameConfig';
 import type { Vec2 } from '../core/math';
+import type { GremlinKind } from '../game/Gremlin';
 import { Particles } from './Particles';
 
 const F = CONFIG.feel;
 const REDUCED_INTENSITY = 0.3;
 const POPUP_HEIGHT = 0.22;
+const SHOCKWAVE_POOL = 3;
+const SHOCKWAVE_SECONDS = 0.38;
+
+const KIND_COLOR: Record<GremlinKind, number> = {
+  runner: PALETTE.gremlinGreen,
+  bomb: PALETTE.chaosOrange,
+  tank: PALETTE.armorViolet,
+};
+
+interface Shockwave {
+  mesh: Mesh;
+  material: MeshBasicMaterial;
+  age: number;
+  radius: number;
+}
 
 /**
- * "Juice" dosificado: partículas, sacudida de la arena virtual (nunca del vídeo real),
- * micro-pausa de impacto y textos efímeros. Todo se atenúa con "reducir efectos" y con el nivel de calidad.
+ * "Juice" dosificado: partículas, ondas de explosión, sacudida de la arena virtual (nunca del
+ * vídeo real), micro-pausa de impacto y textos efímeros. Todo se atenúa con "reducir efectos"
+ * y con el nivel de calidad.
  */
 export class Effects {
   readonly particles = new Particles();
@@ -21,6 +38,8 @@ export class Effects {
   private particleScale = 1;
   private trauma = 0;
   private time = 0;
+  private readonly shockwaves: Shockwave[] = [];
+  private nextShockwave = 0;
   private readonly popups: HTMLElement[] = [];
   private nextPopup = 0;
   private readonly screen: Vec2 = { x: 0, y: 0 };
@@ -31,6 +50,21 @@ export class Effects {
     popupLayer: HTMLElement,
   ) {
     root.add(this.particles.mesh);
+    const ring = new RingGeometry(0.84, 1, 40);
+    for (let i = 0; i < SHOCKWAVE_POOL; i++) {
+      const material = new MeshBasicMaterial({
+        color: PALETTE.chaosOrange,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const mesh = new Mesh(ring, material);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = 0.04;
+      mesh.visible = false;
+      root.add(mesh);
+      this.shockwaves.push({ mesh, material, age: SHOCKWAVE_SECONDS, radius: 0 });
+    }
     for (let i = 0; i < F.popupMax; i++) {
       const el = document.createElement('div');
       el.className = 'popup';
@@ -57,23 +91,57 @@ export class Effects {
   }
 
   wall(x: number, z: number): void {
-    this.burst(x, 0.08, z, PALETTE.gremlinGreen, 6, 0.8);
+    this.burst(x, 0.08, z, PALETTE.smokeWhite, 6, 0.8);
     this.addTrauma(0.2);
   }
 
-  /** @param points puntos concedidos; 0 muestra solo la onomatopeya (práctica). */
-  impact(x: number, z: number, chain: number, points: number, now: number): void {
-    this.burst(x, 0.1, z, PALETTE.scoreYellow, 14, 1.7);
-    this.burst(x, 0.1, z, PALETTE.gremlinGreen, 8, 1.1);
-    this.addTrauma(0.45 + 0.12 * Math.min(chain, 4));
-    this.hitStopUntil = now + F.hitStopMs * this.intensity;
+  /**
+   * Un enemigo cae derribado.
+   * @param multiplier multiplicador de combo aplicado.
+   * @param points     puntos concedidos; 0 muestra solo la onomatopeya (práctica).
+   */
+  defeat(x: number, z: number, kind: GremlinKind, multiplier: number, points: number, now: number): void {
+    this.burst(x, 0.1, z, PALETTE.scoreYellow, 12, 1.7);
+    this.burst(x, 0.1, z, KIND_COLOR[kind], 9, 1.1);
+    this.addTrauma(0.4 + 0.1 * multiplier);
+    this.hitStop(now, F.hitStopMs);
     const text = points > 0 ? `+${points}` : '¡ZAS!';
-    this.popup(chain > 1 ? `x${chain} ${text}` : text, x, z, chain > 1 ? 'popup-chain' : '');
+    this.popup(multiplier > 1 ? `x${multiplier} ${text}` : text, x, z, multiplier > 1 ? 'popup-chain' : '');
+  }
+
+  /** La armadura del Tank aguanta: chispas y un golpe seco, sin puntos. */
+  armorHit(x: number, z: number, now: number): void {
+    this.burst(x, 0.14, z, PALETTE.smokeWhite, 8, 1.5);
+    this.burst(x, 0.14, z, PALETTE.armorViolet, 8, 1.1);
+    this.addTrauma(0.35);
+    this.hitStop(now, F.hitStopMs);
+    this.popup('¡CRAC!', x, z, 'popup-armor');
+  }
+
+  tooHeavy(x: number, z: number): void {
+    this.popup('¡Pesa mucho!', x, z, 'popup-armor');
+  }
+
+  /** Explosión de un Bomb: onda que marca el radio real de daño. */
+  explosion(x: number, z: number, radius: number, now: number): void {
+    this.burst(x, 0.12, z, PALETTE.chaosOrange, 24, 2.4);
+    this.burst(x, 0.12, z, PALETTE.scoreYellow, 14, 1.6);
+    this.burst(x, 0.12, z, PALETTE.smokeWhite, 6, 0.9);
+    this.addTrauma(0.85);
+    this.hitStop(now, F.explosionHitStopMs);
+    const wave = this.shockwaves[this.nextShockwave]!;
+    this.nextShockwave = (this.nextShockwave + 1) % this.shockwaves.length;
+    wave.age = 0;
+    wave.radius = radius;
+    wave.mesh.position.x = x;
+    wave.mesh.position.z = z;
+    wave.mesh.visible = true;
+    this.popup('¡BUM!', x, z, 'popup-boom');
   }
 
   /** El proyectil gastado se desvanece: puntos sin multiplicador. */
-  spent(x: number, z: number, points: number): void {
-    this.burst(x, 0.08, z, PALETTE.gremlinGreen, 8, 0.9);
+  spent(x: number, z: number, kind: GremlinKind, points: number): void {
+    this.burst(x, 0.08, z, KIND_COLOR[kind], 8, 0.9);
     if (points > 0) this.popup(`+${points}`, x, z, '');
   }
 
@@ -100,11 +168,28 @@ export class Effects {
   update(dtSeconds: number): void {
     this.time += dtSeconds;
     this.particles.update(dtSeconds);
+    for (const wave of this.shockwaves) {
+      if (!wave.mesh.visible) continue;
+      wave.age += dtSeconds;
+      const k = wave.age / SHOCKWAVE_SECONDS;
+      if (k >= 1) {
+        wave.mesh.visible = false;
+        continue;
+      }
+      // Sale rápido y frena (ease-out): el borde exterior termina justo en el radio de daño.
+      const eased = 1 - (1 - k) * (1 - k);
+      wave.mesh.scale.setScalar(Math.max(0.01, wave.radius * eased));
+      wave.material.opacity = 0.9 * (1 - k);
+    }
     this.trauma = Math.max(0, this.trauma - F.shakeDecayPerSecond * dtSeconds);
     const amount = F.shakeMax * this.trauma * this.trauma * this.intensity;
     // Ruido barato y continuo: dos senos desfasados por eje.
     this.root.position.x = amount * Math.sin(this.time * 71) * Math.cos(this.time * 13);
     this.root.position.z = amount * Math.sin(this.time * 59 + 1.7) * Math.cos(this.time * 17);
+  }
+
+  private hitStop(now: number, ms: number): void {
+    this.hitStopUntil = Math.max(this.hitStopUntil, now + ms * this.intensity);
   }
 
   private addTrauma(amount: number): void {

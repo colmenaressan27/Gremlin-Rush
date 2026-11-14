@@ -34,6 +34,16 @@ type TutorialStep = 'grab' | 'throw' | 'hit' | 'done';
 const MAX_FRAME_MS = 100;
 const FINISH_DELAY_SECONDS = 0.9;
 const COMBAT_HINT_MS = 3500;
+/** Tiempo que se muestra la pista de un tipo de enemigo la primera vez que aparece en la partida. */
+const KIND_HINT_MS = 5000;
+const KIND_HINTS = {
+  bomb: 'Bomb naranja: atrápalo y lánzalo, explota al chocar',
+  tank: 'Tank morado: no se levanta. Usa un Bomb o dale 3 golpes',
+} as const;
+const TUTORIAL_STEPS = 3;
+/** Desplazamiento (unidades de arena) entre dos textos que nacen en el mismo punto. */
+const POPUP_OFFSET = 0.2;
+const HAPTIC_BLAST_MS = 45;
 /** Últimos segundos de partida: el cronómetro se marca como urgente. */
 const URGENT_SECONDS = 10;
 const HAPTIC_CORE_MS = 80;
@@ -98,6 +108,14 @@ export class App {
   private practiceDone = false;
   private paused = false;
   private combatHintUntil = 0;
+  /** Última oleada anunciada en pantalla (-1 = ninguna todavía). */
+  private shownWave = -1;
+  private kindHint = '';
+  private kindHintUntil = 0;
+  private seenBomb = false;
+  private seenTank = false;
+  /** El último intento del tutorial acabó en "soltar sin impulso": se explica cómo lanzar. */
+  private droppedSlow = false;
   private qualityTier = 0;
   private lowFpsMs = 0;
   private wakeLock: WakeLockSentinel | null = null;
@@ -216,17 +234,29 @@ export class App {
     this.lowFpsMs = 0;
     this.applyQuality();
     this.metrics.resetSession();
-    this.session.start(!this.practiceDone, this.matchDuration());
+    this.shownWave = -1;
+    this.kindHint = '';
+    this.seenBomb = false;
+    this.seenTank = false;
+    this.droppedSlow = false;
+    this.session.start(!this.practiceDone, {
+      durationSeconds: this.testParam('duracion') ?? CONFIG.match.durationSeconds,
+      startAtSeconds: this.testParam('inicio') ?? 0,
+      assisted: this.settings.assisted,
+    });
     if (this.practiceDone) this.combatHintUntil = performance.now() + COMBAT_HINT_MS;
     this.hud.setMode('playing');
     this.sfx.confirm();
   }
 
-  /** La duración solo se puede acortar en desarrollo o simulación, para las pruebas automáticas. */
-  private matchDuration(): number {
-    const requested = Number(this.query.get('duracion'));
+  /**
+   * Parámetros de dirección para las pruebas automáticas (?duracion=N acorta la partida,
+   * ?inicio=N la empieza con N segundos ya transcurridos). Solo en desarrollo o simulación.
+   */
+  private testParam(name: string): number | null {
+    const requested = Number(this.query.get(name));
     const allowed = (import.meta.env.DEV || this.simulated) && requested > 0;
-    return allowed ? requested : CONFIG.match.durationSeconds;
+    return allowed ? requested : null;
   }
 
   private finishSession(): void {
@@ -269,8 +299,15 @@ export class App {
         label: 'Récord',
         value: isRecord ? `¡Nuevo! (antes ${points(previousBest)})` : points(previousBest),
       },
+      {
+        label: 'Combo máximo',
+        value: s.bestCombo >= 2 ? `x${Math.min(s.bestCombo, CONFIG.score.maxMultiplier)} (${s.bestCombo} golpes)` : '—',
+      },
       { label: 'Derrotados', value: `${s.defeated}` },
-      { label: 'Mejor cadena', value: `x${s.bestChain}` },
+      {
+        label: 'Runner · Bomb · Tank',
+        value: `${s.defeatedByKind.runner} · ${s.defeatedByKind.bomb} · ${s.defeatedByKind.tank}`,
+      },
       won
         ? { label: 'Vidas', value: `${s.lives} (+${points(s.lifeBonus)})` }
         : { label: 'Aguantaste', value: `${Math.round(s.progress * 100)} % del tiempo` },
@@ -295,6 +332,8 @@ export class App {
     this.effects.setReduced(s.reduceEffects);
     this.sfx.setEnabled(s.sound);
     this.diagnostics.setEnabled(s.diagnostics || this.query.has('diag'));
+    if (s.largeText) document.documentElement.dataset.text = 'large';
+    else delete document.documentElement.dataset.text;
     this.mirrored = !this.simulated && this.camera.mirroredByDefault !== s.flipMirror;
     this.camera.video.classList.toggle('mirrored', this.mirrored);
   }
@@ -361,8 +400,10 @@ export class App {
 
   private onVisibilityChange(): void {
     if (document.visibilityState === 'hidden') {
-      // Al salir de la página no se lanza nada: lo que haya en la mano simplemente cae.
+      // Al salir de la página no se lanza nada: lo que haya en la mano simplemente cae,
+      // y el combate queda en pausa hasta que la mano vuelva a verse.
       this.grab.cancel();
+      if (this.state === 'playing' && this.session.phase === 'combat') this.paused = true;
       return;
     }
     this.lastFrameMs = performance.now();
@@ -488,6 +529,7 @@ export class App {
         g,
         dt,
         this.grab.hovered === g,
+        this.grab.aimTarget === g,
         this.grab.lift,
         this.grab.cursorValid,
         this.grab.cursor.x,
@@ -523,6 +565,14 @@ export class App {
     if (now >= this.effects.hitStopUntil) {
       this.world.update(dt);
       this.session.update(dt, this.grab.cursor.x, this.grab.cursor.y, this.grab.cursorValid);
+    }
+    const s = this.session;
+    if (s.phase === 'combat' && s.wave !== this.shownWave) {
+      this.shownWave = s.wave;
+      const wave = CONFIG.waves[s.wave]!;
+      this.hud.showWave(wave.title, wave.subtitle);
+      if (s.wave === 0) this.sfx.alert();
+      else this.sfx.wave();
     }
     if (this.session.finished) {
       this.finishTimer += dt;
@@ -570,16 +620,40 @@ export class App {
     let banner = '';
     if (this.cameraDown) banner = 'Cámara interrumpida · reconectando…';
     else if (this.simulated) banner = 'Simulación con ratón · solo desarrollo';
-    else if (this.state === 'prepare' && this.viewHeight > this.viewWidth) {
+    else if (this.state !== 'result' && this.viewHeight > this.viewWidth) {
       banner = 'Mejor en horizontal: gira el móvil';
     }
     this.hud.setBanner(banner);
 
     let hint = '';
+    let tutorialStep = 0;
+    let tutorialIcon = '';
+    let tutorialText = '';
     if (this.state === 'playing') {
       const s = this.session;
-      if (s.phase === 'practice') {
+      const handMissing = lost && hand.absentMs > CONFIG.gesture.absentHintMs;
+      this.hud.setCombo(s.combo, s.multiplier, s.comboFraction);
+      if (s.phase === 'practice' || s.phase === 'intro') {
         this.hud.setMatchInfo('Práctica', null, CONFIG.match.lives, '', false);
+        // Sin mano, la ayuda de "acerca la mano" sustituye a la tarjeta del tutorial.
+        if (handMissing) {
+          tutorialStep = 0;
+        } else if (s.phase === 'intro') {
+          tutorialStep = 3;
+          tutorialIcon = '🛡️';
+          tutorialText = '¡Defiende el núcleo! Que ningún gremlin lo toque';
+        } else if (this.tutorial === 'grab') {
+          tutorialStep = 1;
+          tutorialIcon = '🤏';
+          tutorialText = 'Atrapa un gremlin: junta pulgar e índice sobre él';
+        } else {
+          tutorialStep = 2;
+          tutorialIcon = '💥';
+          if (this.grab.held) tutorialText = 'Mueve la mano hacia otro gremlin y abre los dedos';
+          else if (this.droppedSlow) tutorialText = 'Atrápalo otra vez y abre los dedos con la mano en movimiento';
+          else if (this.tutorial === 'hit') tutorialText = '¡Casi! Atrapa uno y lánzalo contra otro gremlin';
+          else tutorialText = 'Lánzalo contra otro gremlin';
+        }
       } else {
         const seconds = Math.ceil(s.timeLeft);
         const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
@@ -591,18 +665,18 @@ export class App {
           seconds <= URGENT_SECONDS,
         );
       }
+      const now = performance.now();
       if (this.paused) hint = '';
-      else if (lost && hand.absentMs > CONFIG.gesture.absentHintMs) hint = 'Acerca la mano a la arena';
-      else if (this.tutorial === 'grab') hint = 'Pellizca un gremlin con pulgar e índice';
-      else if (this.tutorial === 'throw') {
-        hint = this.grab.held ? 'Mueve la mano y suelta con impulso' : 'Atrápalo y suéltalo con impulso';
-      } else if (this.tutorial === 'hit') hint = 'Lánzalo contra otro gremlin';
-      else if (performance.now() < this.combatHintUntil) hint = '¡Defiende el núcleo!';
+      else if (handMissing) hint = 'Acerca la mano a la arena';
+      else if (tutorialStep > 0) hint = '';
+      else if (now < this.kindHintUntil) hint = this.kindHint;
+      else if (now < this.combatHintUntil) hint = '¡Defiende el núcleo!';
     } else if (lost) {
       hint = 'Mete una mano en la imagen';
     } else if (this.state === 'prepare') {
       hint = 'Para empezar: palma abierta sobre el núcleo';
     }
+    this.hud.setTutorial(tutorialStep, TUTORIAL_STEPS, tutorialIcon, tutorialText);
     this.hud.setHint(hint);
   }
 
@@ -619,7 +693,10 @@ export class App {
       this.effects.grab(g.x, g.y);
       this.sfx.grab();
       this.vibrate(HAPTIC_GRAB_MS);
-      if (this.tutorial === 'grab') this.tutorial = 'throw';
+      if (this.tutorial === 'grab') {
+        this.tutorial = 'throw';
+        this.sfx.stepDone();
+      }
     },
     onMiss: () => {
       const c = this.metrics.counters;
@@ -627,18 +704,27 @@ export class App {
       c.misses++;
       this.sfx.miss();
     },
+    // No cuenta como agarre fallido: el pellizco fue correcto, el enemigo no se puede levantar.
+    onTooHeavy: (g: Gremlin) => {
+      this.world.rattle(g);
+      this.effects.tooHeavy(g.x, g.y);
+      this.sfx.tooHeavy();
+    },
     onChargeFull: () => this.sfx.chargeFull(),
     onThrow: (g: Gremlin, handSpeed: number, launchSpeed: number) => {
       this.metrics.counters.throws++;
       this.metrics.lastRelease = `mano ${handSpeed.toFixed(1)} u/s → lanzado a ${launchSpeed.toFixed(1)} u/s`;
       this.effects.throwTrail(g.x, g.y);
       this.sfx.throwWhoosh(g.charge);
+      if (g.kind === 'bomb') this.sfx.fuse();
+      this.droppedSlow = false;
       if (this.tutorial === 'throw') this.tutorial = 'hit';
     },
     onDrop: (_g: Gremlin, reason: DropReason, handSpeed: number) => {
       const c = this.metrics.counters;
       if (reason === 'slow') {
         c.dropsSlow++;
+        this.droppedSlow = true;
         this.metrics.lastRelease = `mano ${handSpeed.toFixed(1)} u/s → soltado (mínimo ${CONFIG.throwing.minSpeed})`;
         this.sfx.drop();
       } else if (reason === 'lost') {
@@ -650,22 +736,44 @@ export class App {
   };
 
   private readonly worldListener: WorldListener = {
-    onSpawn: () => undefined,
-    onImpact: (projectile: Gremlin, victim: Gremlin) => {
+    onSpawn: (g: Gremlin) => {
+      // La primera vez que aparece un tipo nuevo en la partida se explica qué hacer con él.
+      if (this.state !== 'playing' || g.behavior !== 'attack') return;
+      if (g.kind === 'bomb' && !this.seenBomb) {
+        this.seenBomb = true;
+        this.showKindHint(KIND_HINTS.bomb);
+      } else if (g.kind === 'tank' && !this.seenTank) {
+        this.seenTank = true;
+        this.showKindHint(KIND_HINTS.tank);
+      }
+    },
+    onImpact: (_projectile: Gremlin, victim: Gremlin, _speed: number, killed: boolean) => {
       if (this.state !== 'playing') return;
       this.metrics.counters.hits++;
       const wasPractice = this.session.phase === 'practice';
-      const points = this.session.registerImpact(projectile.chain);
-      this.effects.impact(victim.x, victim.y, projectile.chain, points, performance.now());
-      this.sfx.hit(projectile.chain);
+      this.scoreHit(victim, killed);
+      this.sfx.hit(Math.max(1, this.session.combo));
       this.vibrate(HAPTIC_HIT_MS);
       this.tutorial = 'done';
       if (wasPractice) {
-        // Primer golpe conseguido: termina la práctica y empieza la partida de verdad.
+        // Primer golpe conseguido: termina la práctica y se anuncia la partida de verdad.
         this.practiceDone = true;
-        this.combatHintUntil = performance.now() + COMBAT_HINT_MS;
-        this.sfx.alert();
+        this.sfx.stepDone();
       }
+    },
+    onExplosion: (bomb: Gremlin, hits: number, thrown: boolean) => {
+      this.effects.explosion(bomb.x, bomb.y, CONFIG.bomb.blastRadius + bomb.radius, performance.now());
+      this.sfx.explosion();
+      this.vibrate(HAPTIC_BLAST_MS);
+      // Un Bomb lanzado que alcanza a alguien es munición gastada: puntúa sin multiplicador.
+      if (this.state === 'playing' && thrown && hits > 0) {
+        const points = this.session.registerSpent('bomb');
+        if (points > 0) this.effects.popup(`+${points}`, bomb.x, bomb.y + POPUP_OFFSET, '');
+      }
+    },
+    onBlast: (_bomb: Gremlin, victim: Gremlin, killed: boolean) => {
+      if (this.state !== 'playing') return;
+      this.scoreHit(victim, killed);
     },
     onWallBounce: (g: Gremlin) => {
       this.effects.wall(g.x, g.y);
@@ -674,7 +782,7 @@ export class App {
     onSettle: () => undefined,
     onSpent: (g: Gremlin) => {
       if (this.state !== 'playing') return;
-      this.effects.spent(g.x, g.y, this.session.registerSpent());
+      this.effects.spent(g.x, g.y, g.kind, this.session.registerSpent(g.kind));
     },
     onCoreReached: () => {
       if (this.state !== 'playing' || !this.session.registerCoreHit()) return;
@@ -685,6 +793,26 @@ export class App {
     },
     onDefeated: () => undefined,
   };
+
+  /** Puntúa un impacto del jugador (golpe o explosión) y lanza su respuesta visual y sonora. */
+  private scoreHit(victim: Gremlin, killed: boolean): void {
+    const points = this.session.registerHit(victim.kind, killed);
+    const now = performance.now();
+    if (!killed) {
+      this.effects.armorHit(victim.x, victim.y, now);
+      this.sfx.armorHit();
+      return;
+    }
+    // El texto de puntos de un Bomb se desplaza para no quedar bajo el "¡BUM!" de su explosión.
+    const z = victim.kind === 'bomb' ? victim.y + POPUP_OFFSET : victim.y;
+    this.effects.defeat(victim.x, z, victim.kind, this.session.multiplier, points, now);
+    if (victim.kind === 'tank') this.sfx.tankBreak();
+  }
+
+  private showKindHint(text: string): void {
+    this.kindHint = text;
+    this.kindHintUntil = performance.now() + KIND_HINT_MS;
+  }
 
   private vibrate(ms: number): void {
     if (this.settings.reduceEffects) return;
@@ -711,6 +839,8 @@ export class App {
           .filter((g) => g.state !== 'inactive')
           .map((g) => ({
             id: g.id,
+            kind: g.kind,
+            hp: g.hp,
             state: g.state,
             ...this.anchor.arenaToScreen(g.x, CONFIG.arena.cursorPlaneY, g.y, screen),
           })),

@@ -1,6 +1,8 @@
-export type GremlinKind = 'runner';
+import { CONFIG } from '../config/gameConfig';
 
-/** 'wander' = deambula sin amenazar (práctica); 'attack' = corre hacia el núcleo. */
+export type GremlinKind = 'runner' | 'bomb' | 'tank';
+
+/** 'wander' = deambula sin amenazar (práctica); 'attack' = camina hacia el núcleo. */
 export type GremlinBehavior = 'wander' | 'attack';
 
 export type GremlinState =
@@ -11,6 +13,9 @@ export type GremlinState =
   | 'thrown'
   | 'stunned'
   | 'dying';
+
+/** Valor de hurtTime que significa "no ha recibido ningún golpe reciente". */
+export const NOT_HURT = 99;
 
 /** Entidad de simulación (sin nada de render). Posición en el plano de la arena: x, y(=Z del mundo). */
 export interface Gremlin {
@@ -39,8 +44,14 @@ export interface Gremlin {
   /** Carga 0..1 mientras está agarrado; potencia con la que fue lanzado. */
   charge: number;
   power: number;
-  /** Golpes encadenados por este gremlin en su lanzamiento actual. */
+  /** Golpes dados por este gremlin en su lanzamiento actual. */
   chain: number;
+  /** Golpes que le quedan por aguantar. */
+  hp: number;
+  /** Segundos desde el último golpe que resistió (Tank); NOT_HURT si no hay ninguno reciente. */
+  hurtTime: number;
+  /** Bomb: segundos hasta explotar; negativo = mecha sin encender. */
+  fuse: number;
 }
 
 export function createGremlin(id: number): Gremlin {
@@ -64,11 +75,20 @@ export function createGremlin(id: number): Gremlin {
     charge: 0,
     power: 0,
     chain: 0,
+    hp: 1,
+    hurtTime: NOT_HURT,
+    fuse: -1,
   };
 }
 
-export const isGrabbable = (g: Gremlin): boolean => g.state === 'walking' || g.state === 'stunned';
+const onTheGround = (g: Gremlin): boolean => g.state === 'walking' || g.state === 'stunned';
 
-/** Puede recibir el impacto de un gremlin lanzado. */
-export const isHittable = (g: Gremlin): boolean =>
-  g.state === 'walking' || g.state === 'stunned' || g.state === 'spawning';
+/** Se puede levantar con el pellizco: en el suelo, de un tipo ligero y sin la mecha encendida. */
+export const isGrabbable = (g: Gremlin): boolean =>
+  onTheGround(g) && CONFIG.kinds[g.kind].grabbable && g.fuse < 0;
+
+/** Está en el suelo pero pesa demasiado para levantarlo (Tank). */
+export const isTooHeavy = (g: Gremlin): boolean => onTheGround(g) && !CONFIG.kinds[g.kind].grabbable;
+
+/** Puede recibir el impacto de un gremlin lanzado o de una explosión. */
+export const isHittable = (g: Gremlin): boolean => onTheGround(g) || g.state === 'spawning';

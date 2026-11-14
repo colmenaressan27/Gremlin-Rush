@@ -4,6 +4,8 @@ import {
   createGremlin,
   isGrabbable,
   isHittable,
+  isTooHeavy,
+  NOT_HURT,
   type Gremlin,
   type GremlinBehavior,
   type GremlinKind,
@@ -12,7 +14,15 @@ import {
 /** Avisos de la simulación hacia efectos, sonido, puntuación y métricas. */
 export interface WorldListener {
   onSpawn(g: Gremlin): void;
-  onImpact(projectile: Gremlin, victim: Gremlin, speed: number): void;
+  /** Un gremlin lanzado golpea a otro. killed = false si la víctima resistió el golpe (Tank). */
+  onImpact(projectile: Gremlin, victim: Gremlin, speed: number, killed: boolean): void;
+  /**
+   * Un Bomb explota. hits = enemigos dentro del radio; thrown = iba lanzado por el jugador
+   * (munición gastada) y no detonado por un golpe o por otra explosión.
+   */
+  onExplosion(bomb: Gremlin, hits: number, thrown: boolean): void;
+  /** La explosión alcanza a una víctima. Otro Bomb alcanzado cuenta como destruido y explota poco después. */
+  onBlast(bomb: Gremlin, victim: Gremlin, killed: boolean): void;
   onWallBounce(g: Gremlin, speed: number): void;
   onSettle(g: Gremlin): void;
   /** Un proyectil que había golpeado a alguien se detiene y desaparece ("munición gastada"). */
@@ -25,6 +35,9 @@ export interface WorldListener {
 const P = CONFIG.physics;
 const A = CONFIG.arena;
 const R = CONFIG.runner;
+const K = CONFIG.kinds;
+const B = CONFIG.bomb;
+const T = CONFIG.tank;
 const TWO_PI = Math.PI * 2;
 const ARRIVE_DISTANCE = 0.06;
 const TURN_RATE = 10;
@@ -34,6 +47,8 @@ const IMPACT_DEFLECTION = 0.25;
 const WALL_BOUNCE_MIN_SPEED = 0.4;
 /** Fracción del radio del gremlin que debe solaparse con el núcleo para contar como contacto. */
 const CORE_CONTACT = 0.4;
+/** Punto de la vibración en el que empieza un "rattle": pasado el destello blanco del golpe real. */
+const RATTLE_START = 0.1;
 
 /**
  * Simulación 2.5D de la arena: círculos sobre un plano con paso fijo.
@@ -45,6 +60,8 @@ export class World {
   listener: WorldListener | null = null;
   private accumulator = 0;
   private time = 0;
+  /** Lista reutilizada para las víctimas de una explosión (sin crear arrays durante la partida). */
+  private readonly blastVictims: Gremlin[] = [];
 
   constructor(capacity: number) {
     for (let i = 0; i < capacity; i++) this.gremlins.push(createGremlin(i));
@@ -65,12 +82,21 @@ export class World {
     return n;
   }
 
+  /** Enemigos vivos de un tipo. */
+  countKind(kind: GremlinKind): number {
+    let n = 0;
+    for (const g of this.gremlins) {
+      if (g.state !== 'inactive' && g.state !== 'dying' && g.kind === kind) n++;
+    }
+    return n;
+  }
+
   /** Cambia el comportamiento de todos los gremlins vivos (p. ej. al acabar la práctica o la partida). */
   setAllBehavior(behavior: GremlinBehavior, speed: number): void {
     for (const g of this.gremlins) {
       if (g.state === 'inactive') continue;
       g.behavior = behavior;
-      g.speed = speed;
+      g.speed = speed * K[g.kind].speedFactor;
       if (behavior === 'wander') this.pickTarget(g);
     }
   }
@@ -92,7 +118,10 @@ export class World {
       g.y = y;
       g.vx = 0;
       g.vy = 0;
-      g.radius = R.radius;
+      g.radius = K[kind].radius;
+      g.hp = K[kind].hp;
+      g.hurtTime = NOT_HURT;
+      g.fuse = -1;
       g.facing = Math.atan2(-y, -x);
       g.stateTime = 0;
       g.stateDuration = P.spawnSeconds;
@@ -115,6 +144,21 @@ export class World {
       if (!isGrabbable(g)) continue;
       const d = Math.hypot(g.x - x, g.y - y);
       if (d <= bestDist) {
+        bestDist = d;
+        best = g;
+      }
+    }
+    return best;
+  }
+
+  /** Gremlin demasiado pesado para levantarlo (Tank) bajo el punto indicado, si lo hay. */
+  findTooHeavy(x: number, y: number, radius: number): Gremlin | null {
+    let best: Gremlin | null = null;
+    let bestDist = Infinity;
+    for (const g of this.gremlins) {
+      if (!isTooHeavy(g)) continue;
+      const d = Math.hypot(g.x - x, g.y - y);
+      if (d <= radius + g.radius * 0.5 && d < bestDist) {
         bestDist = d;
         best = g;
       }
@@ -150,6 +194,7 @@ export class World {
     g.vy = 0;
     g.charge = 0;
     g.chain = 0;
+    g.fuse = -1;
   }
 
   throwGremlin(g: Gremlin, vx: number, vy: number, power: number): void {
@@ -159,6 +204,13 @@ export class World {
     g.vy = vy;
     g.power = power;
     g.chain = 0;
+    // Un Bomb lanzado lleva la mecha encendida: explota al chocar o al agotarse.
+    g.fuse = g.kind === 'bomb' ? B.thrownFuseSeconds : -1;
+  }
+
+  /** Hace vibrar a un gremlin sin dañarlo (respuesta a un pellizco sobre un Tank). */
+  rattle(g: Gremlin): void {
+    g.hurtTime = RATTLE_START;
   }
 
   /** Suelta sin impulso: el gremlin cae en un punto seguro dentro de la arena. */
@@ -185,6 +237,14 @@ export class World {
     for (const g of this.gremlins) {
       if (g.state === 'inactive') continue;
       g.stateTime += dt;
+      if (g.hurtTime < NOT_HURT) g.hurtTime += dt;
+      if (g.fuse >= 0 && g.state !== 'dying' && g.state !== 'held') {
+        g.fuse -= dt;
+        if (g.fuse <= 0) {
+          this.explode(g);
+          continue;
+        }
+      }
       switch (g.state) {
         case 'spawning':
           if (g.stateTime >= g.stateDuration) this.setWalking(g);
@@ -286,12 +346,22 @@ export class World {
       const dy = other.y - g.y;
       const d = Math.hypot(dx, dy);
       if (d > g.radius + other.radius) continue;
+      // Solo cuenta si se acerca: tras rebotar en un Tank sigue solapado un instante.
+      if (g.vx * dx + g.vy * dy <= 0) continue;
       const speed = Math.hypot(g.vx, g.vy);
       if (speed < P.minImpactSpeed) continue;
+      if (g.kind === 'bomb') {
+        this.explode(g);
+        return;
+      }
       this.resolveImpact(g, other, dx, dy, d, speed);
     }
 
     if (Math.hypot(g.vx, g.vy) < P.settleSpeed) {
+      if (g.kind === 'bomb') {
+        this.explode(g);
+        return;
+      }
       g.vx = 0;
       g.vy = 0;
       g.stateTime = 0;
@@ -319,16 +389,24 @@ export class World {
     const dirX = projectile.vx / speed;
     const dirY = projectile.vy / speed;
 
-    victim.state = 'dying';
-    victim.stateTime = 0;
-    victim.stateDuration = P.dyingSeconds;
-    victim.vx = dirX * P.knockbackSpeed;
-    victim.vy = dirY * P.knockbackSpeed;
+    // Normal del choque: de la víctima hacia el proyectil.
+    const nx = d > 0 ? -dx / d : -dirX;
+    const ny = d > 0 ? -dy / d : -dirY;
+    projectile.chain++;
+
+    victim.hp -= 1;
+    if (victim.hp > 0) {
+      // Armadura: la víctima aguanta y vibra; el proyectil rebota (el Tank bloquea la trayectoria).
+      victim.hurtTime = 0;
+      const into = projectile.vx * nx + projectile.vy * ny;
+      projectile.vx = (projectile.vx - 2 * into * nx) * T.bounceRetain;
+      projectile.vy = (projectile.vy - 2 * into * ny) * T.bounceRetain;
+      this.listener?.onImpact(projectile, victim, speed, false);
+      return;
+    }
 
     // El proyectil pierde algo de velocidad y se desvía un poco hacia el lado contrario a la víctima,
     // pero sigue su camino: así una buena línea puede encadenar varios golpes.
-    const nx = d > 0 ? -dx / d : -dirX;
-    const ny = d > 0 ? -dy / d : -dirY;
     let vx = dirX + nx * IMPACT_DEFLECTION;
     let vy = dirY + ny * IMPACT_DEFLECTION;
     const m = Math.hypot(vx, vy) || 1;
@@ -337,8 +415,59 @@ export class World {
     const retained = speed * P.impactRetain;
     projectile.vx = vx * retained;
     projectile.vy = vy * retained;
-    projectile.chain++;
-    this.listener?.onImpact(projectile, victim, speed);
+    this.listener?.onImpact(projectile, victim, speed, true);
+    if (victim.kind === 'bomb') this.explode(victim);
+    else this.kill(victim, dirX * P.knockbackSpeed, dirY * P.knockbackSpeed);
+  }
+
+  private kill(g: Gremlin, vx: number, vy: number): void {
+    g.state = 'dying';
+    g.stateTime = 0;
+    g.stateDuration = P.dyingSeconds;
+    g.vx = vx;
+    g.vy = vy;
+    g.fuse = -1;
+  }
+
+  /** Explosión en área: daña a todo enemigo golpeable dentro del radio y enciende a otros Bomb. */
+  private explode(bomb: Gremlin): void {
+    const thrown = bomb.state === 'thrown';
+    this.kill(bomb, 0, 0);
+
+    const victims = this.blastVictims;
+    victims.length = 0;
+    for (const other of this.gremlins) {
+      if (other === bomb || !isHittable(other)) continue;
+      if (Math.hypot(other.x - bomb.x, other.y - bomb.y) <= B.blastRadius + other.radius) victims.push(other);
+    }
+    this.listener?.onExplosion(bomb, victims.length, thrown);
+
+    for (const victim of victims) {
+      if (victim.kind === 'bomb') {
+        if (victim.fuse >= 0) continue; // ya estaba a punto de explotar
+        // Reacción en cadena: se queda clavado en el sitio y explota un instante después.
+        victim.fuse = B.chainDelaySeconds;
+        victim.state = 'stunned';
+        victim.stateTime = 0;
+        victim.stateDuration = B.chainDelaySeconds + 1;
+        victim.vx = 0;
+        victim.vy = 0;
+        this.listener?.onBlast(bomb, victim, true);
+        continue;
+      }
+      victim.hp -= B.blastDamage;
+      if (victim.hp > 0) {
+        victim.hurtTime = 0;
+        this.listener?.onBlast(bomb, victim, false);
+        continue;
+      }
+      const dx = victim.x - bomb.x;
+      const dy = victim.y - bomb.y;
+      const d = Math.hypot(dx, dy) || 1;
+      this.kill(victim, (dx / d) * B.blastKnockback, (dy / d) * B.blastKnockback);
+      this.listener?.onBlast(bomb, victim, true);
+    }
+    victims.length = 0;
   }
 
   private stepDying(g: Gremlin, dt: number): void {

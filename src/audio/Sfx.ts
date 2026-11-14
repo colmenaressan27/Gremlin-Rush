@@ -1,6 +1,6 @@
 import { CONFIG } from '../config/gameConfig';
 
-/** Escala pentatónica mayor (semitonos): cada golpe encadenado sube una nota. */
+/** Escala pentatónica mayor (semitonos): cada golpe del combo sube una nota. */
 const CHAIN_SCALE = [0, 2, 4, 7, 9, 12, 14, 16];
 const NOISE_SECONDS = 1;
 
@@ -83,6 +83,50 @@ export class Sfx {
     this.tone(150, 70, 0.12, 'sine', 0.5);
     this.tone(freq, freq * 1.01, 0.16, 'square', 0.2, 0.02);
     this.tone(freq * 2, freq * 2, 0.1, 'sine', 0.15, 0.05);
+  }
+
+  /** Explosión de un Bomb: golpe grave más ruido que se apaga. */
+  explosion(): void {
+    this.tone(140, 38, 0.38, 'sine', 0.7);
+    this.tone(90, 45, 0.3, 'triangle', 0.4, 0.02);
+    this.sweep(0.42, 2400, 180, 0.6);
+  }
+
+  /** Mecha encendida: siseo breve al lanzar un Bomb. */
+  fuse(): void {
+    this.sweep(0.3, 5200, 7200, 0.14);
+  }
+
+  /** La armadura del Tank aguanta: golpe metálico. */
+  armorHit(): void {
+    this.tone(880, 820, 0.14, 'square', 0.18);
+    this.tone(1320, 1240, 0.2, 'triangle', 0.16, 0.01);
+    this.tone(120, 80, 0.1, 'sine', 0.4);
+  }
+
+  /** El Tank se rompe: el golpe normal más un derrumbe grave. */
+  tankBreak(): void {
+    this.tone(110, 40, 0.3, 'sawtooth', 0.35);
+    this.sweep(0.28, 1400, 300, 0.4);
+  }
+
+  /** Pellizco sobre algo que no se puede levantar. */
+  tooHeavy(): void {
+    this.tone(130, 95, 0.12, 'square', 0.2);
+    this.tone(110, 80, 0.12, 'square', 0.2, 0.13);
+  }
+
+  /** Cambio de oleada: fanfarria corta ascendente. */
+  wave(): void {
+    this.tone(392, 392, 0.1, 'square', 0.18);
+    this.tone(523, 523, 0.1, 'square', 0.18, 0.11);
+    this.tone(659, 659, 0.2, 'square', 0.18, 0.22);
+  }
+
+  /** Paso del tutorial superado. */
+  stepDone(): void {
+    this.tone(784, 784, 0.08, 'triangle', 0.25);
+    this.tone(1175, 1175, 0.14, 'triangle', 0.25, 0.08);
   }
 
   confirm(): void {

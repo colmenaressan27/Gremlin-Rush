@@ -42,6 +42,11 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 
+/* Ajuste "Texto grande": todo el texto usa rem, así que basta con escalar la raíz. */
+html[data-text='large'] {
+  font-size: 120%;
+}
+
 p,
 h1,
 h2,
@@ -108,6 +113,15 @@ dd {
 .popup-danger {
   font-size: 2.4rem;
   color: var(--red);
+}
+
+.popup-boom {
+  font-size: 2.6rem;
+  color: var(--orange);
+}
+
+.popup-armor {
+  color: #c9b8ff;
 }
 
 .popup-show {
@@ -226,6 +240,160 @@ dd {
 
 .result[data-outcome='lost'] .subtitle {
   color: var(--red);
+}
+
+/* Combo: bajo la puntuación, fuera del centro de la arena. */
+.combo {
+  position: absolute;
+  top: calc(var(--gap) + var(--safe-top) + 48px);
+  left: calc(var(--gap) + var(--safe-left));
+  min-width: 150px;
+  padding: 4px 14px 8px;
+  border: 2px solid var(--yellow);
+  border-radius: var(--radius);
+  background: var(--panel);
+  transform-origin: left top;
+}
+
+.combo-label {
+  color: var(--yellow);
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.combo-track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgb(245 242 237 / 0.25);
+  overflow: hidden;
+}
+
+.combo-bar {
+  height: 100%;
+  width: 100%;
+  border-radius: 3px;
+  background: var(--yellow);
+}
+
+.combo-bump {
+  animation: combo-bump 0.3s var(--spring);
+}
+
+@keyframes combo-bump {
+  from {
+    transform: scale(1.35);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+/* Rótulo de oleada: breve y en el tercio superior, para no tapar el núcleo. */
+.wave {
+  position: absolute;
+  left: 50%;
+  top: 24%;
+  transform: translate(-50%, -50%);
+  padding: 8px 26px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 2px solid var(--orange);
+  text-align: center;
+  white-space: nowrap;
+  opacity: 0;
+}
+
+.wave-title {
+  color: var(--orange);
+  font-size: 2rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+}
+
+.wave-subtitle {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.wave-show {
+  animation: wave-show 2.2s ease-out forwards;
+}
+
+@keyframes wave-show {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.7);
+  }
+  10% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+  18% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  82% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+}
+
+/* Tutorial guiado: mismo sitio que la ayuda (abajo), con pictograma y número de paso. */
+.tutorial {
+  position: absolute;
+  bottom: calc(var(--gap) + var(--safe-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 2 * var(--gap));
+  padding: 8px 20px 8px 14px;
+  border: 2px solid var(--green);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.tutorial-icon {
+  font-size: 2.25rem;
+  line-height: 1;
+}
+
+.tutorial-step {
+  color: var(--green);
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.tutorial-text {
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.tutorial-in {
+  animation: tutorial-in 0.3s var(--spring);
+}
+
+@keyframes tutorial-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 .chip-hand {
@@ -662,9 +830,15 @@ dd {
 
 @media (prefers-reduced-motion: reduce) {
   .result,
-  .button-primary {
+  .button-primary,
+  .combo-bump,
+  .tutorial-in {
     animation: none;
     transition: none;
+  }
+
+  .wave-show {
+    animation-timing-function: step-end;
   }
 
   .popup-show {

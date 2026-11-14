@@ -81,15 +81,16 @@ export class Screens {
     const welcome = el('section', 'screen');
     const card = el('div', 'card');
     card.append(
-      el('p', 'badge', 'Fase P0 · prueba de manipulación'),
+      el('p', 'badge', 'Arcade de una mano · 90 segundos'),
       el('h1', 'title', 'Gremlin Rush'),
-      el('p', 'lead', 'Atrapa gremlins con los dedos y lánzalos contra los demás.'),
+      el('p', 'lead', 'Atrapa gremlins con los dedos y lánzalos contra los demás para defender el núcleo.'),
     );
     const steps = el('ol', 'steps');
     for (const text of [
       'Apoya el móvil en un soporte, en horizontal, apuntando a la mesa.',
       'Mete una mano en la imagen. Solo una, y que se vea entera.',
       'Pellizca un gremlin con pulgar e índice. Suelta con un golpe de muñeca para lanzarlo.',
+      'Durante la partida no se toca la pantalla: todo se hace con la mano.',
     ]) {
       steps.append(el('li', '', text));
     }
@@ -217,6 +218,14 @@ export class Screens {
       }),
       this.checkbox('Sonido', s.sound, (v) => {
         s.sound = v;
+        changed();
+      }),
+      this.checkbox('Texto grande', s.largeText, (v) => {
+        s.largeText = v;
+        changed();
+      }),
+      this.checkbox('Modo asistido (enemigos más lentos)', s.assisted, (v) => {
+        s.assisted = v;
         changed();
       }),
       this.checkbox('Mostrar diagnóstico (FPS, mano, latencia)', s.diagnostics, (v) => {

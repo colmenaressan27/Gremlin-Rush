@@ -13,6 +13,8 @@ export interface GrabListener {
   onGrab(g: Gremlin): void;
   /** Pellizco deliberado sin ningún gremlin al alcance. */
   onMiss(): void;
+  /** Pellizco sobre un enemigo que pesa demasiado para levantarlo (Tank). */
+  onTooHeavy(g: Gremlin): void;
   onChargeFull(g: Gremlin): void;
   onThrow(g: Gremlin, handSpeed: number, launchSpeed: number): void;
   onDrop(g: Gremlin, reason: DropReason, handSpeed: number): void;
@@ -23,6 +25,8 @@ const TH = CONFIG.throwing;
 const AR = CONFIG.arena;
 const LIFT_RATE = 14;
 const DEG = Math.PI / 180;
+/** Fracción de la velocidad mínima de lanzamiento a partir de la cual se marca el objetivo previsto. */
+const AIM_PREVIEW = 0.6;
 
 /**
  * Traduce el estado gestual en acciones de juego: resaltar, agarrar, cargar, lanzar o soltar.
@@ -38,6 +42,8 @@ export class GrabController {
   /** Velocidad de mano estimada mientras se sostiene (arena/s): alimenta la flecha de trayectoria. */
   readonly aim: Vec2 = { x: 0, y: 0 };
   aimSpeed = 0;
+  /** Enemigo al que iría el lanzamiento si se soltara ahora (para marcarlo en pantalla). */
+  aimTarget: Gremlin | null = null;
   /** Elevación visual 0..1 del gremlin sostenido. */
   lift = 0;
 
@@ -111,7 +117,11 @@ export class GrabController {
       this.grab(candidate);
     } else if (now > this.pendingPinchUntil || !hand.pinching) {
       this.pendingPinchUntil = -1;
-      this.listener?.onMiss();
+      const heavy = this.cursorValid
+        ? this.world.findTooHeavy(this.cursor.x, this.cursor.y, GR.assistRadius)
+        : null;
+      if (heavy) this.listener?.onTooHeavy(heavy);
+      else this.listener?.onMiss();
     }
   }
 
@@ -130,6 +140,11 @@ export class GrabController {
   private updateHeld(dtSeconds: number): void {
     const g = this.held;
     if (!g) return;
+    if (g.state !== 'held') {
+      // La simulación lo sacó de la mano (p. ej. reinicio de la arena): no hay nada que sostener.
+      this.clearHeld();
+      return;
+    }
     const hand = this.gestures.state;
 
     if (this.cursorValid) {
@@ -155,6 +170,15 @@ export class GrabController {
     }
     const ok = this.estimator.estimate(hand.sampleT, TH.windowMs, TH.minSamples, this.aim);
     this.aimSpeed = ok ? Math.hypot(this.aim.x, this.aim.y) : 0;
+    this.aimTarget =
+      this.aimSpeed >= TH.minSpeed * AIM_PREVIEW
+        ? this.world.findAimTarget(
+            g,
+            Math.atan2(this.aim.y, this.aim.x),
+            TH.aimAssistDeg * DEG,
+            TH.aimAssistRange,
+          )
+        : null;
   }
 
   private release(reason: 'open' | 'lost', releaseStartT: number, sampleT: number): void {
@@ -198,6 +222,7 @@ export class GrabController {
   private clearHeld(): void {
     this.held = null;
     this.aimSpeed = 0;
+    this.aimTarget = null;
     this.gestures.setHolding(false);
   }
 
